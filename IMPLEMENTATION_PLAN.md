@@ -29,9 +29,16 @@
   - OpenCV capture
   - trace smoothness scoring
 - One-axis smooth-ramp runtime motion has now passed optical verification.
-- Recent `1/128` bring-up measured:
-  - startup homing at about `14.2 s`
-  - end-to-end travel at about `24.5k` microsteps
+- The active runtime no longer measures its usable span on startup.
+- The active one-axis startup flow is now:
+  - seek one end with `UART StallGuard`
+  - back off that end
+  - move to center inside a fixed logical travel window
+- The current fixed logical travel window is `10000` microsteps with a `1000` step soft-end margin, so full-scale DMX currently maps into `1000..9000`.
+- Recent live-DMX tuning confirmed a new limitation:
+  - startup homing remains smooth
+  - live DMX motion is still visibly jittery and can hit soft limits or mis-track under aggressive changes
+- The earlier optical smooth-ramp pass is therefore a proof point for an older tuning state, not the current production baseline.
 
 ## MVP Goal
 Ship a reliable first firmware that can:
@@ -79,16 +86,37 @@ For MVP, homing and runtime fault handling should be based on `UART StallGuard`,
 ## Current Validation State
 - Homing-and-centering has optical proof.
 - One-axis runtime has functional proof.
-- One-axis smooth runtime motion now has optical proof.
-- The smooth-ramp verifier is the regression check for further runtime changes.
-- The new `1/128` default runtime is substantially faster, but the exact `~2 s` full-span target still needs one final clean timing measurement.
+- One-axis smooth runtime motion has one historical optical proof point, but the current fixed-span runtime still needs a fresh optical proof after the latest motion changes.
+- The highest-priority open issue is visible jitter under live DMX updates even when homing remains mechanically smooth.
+- The exact `~2 s` full-span target is now secondary to getting commercially acceptable motion quality on one axis first.
+
+## New Immediate Milestone: Commercial-Grade One-Axis Motion
+- Before bringing up the second axis, make one-axis live DMX motion look and feel closer to a commercial moving head.
+- Working assumptions from fixture and motor-control references:
+  - keep `16-bit` pan/tilt style targeting
+  - add fixture-side filtering / deadband so small DMX changes do not create visible chatter
+  - support a vector-style internal move profile rather than simply tracking every tiny DMX update
+  - consider selectable motion curves such as `linear` vs `S-curve`
+  - treat encoder-assisted correction or other closed-loop feedback as future work if open-loop smoothness stalls out
+
+## Research Notes
+- Martin fixture manuals describe two motion strategies:
+  - tracking mode, where the controller sends small updates and the fixture tracks them
+  - vector mode, where the fixture uses an internal speed channel and can produce smoother motion, especially when incoming updates are slow or irregular
+- Martin manuals also explicitly mention digital filtering of tracking updates for smooth movement and `16-bit` pan/tilt positioning.
+- ETC / High End documentation shows that commercial fixtures also invest in:
+  - encoder calibration and multiple encoder technologies
+  - pan/tilt curve selection such as `S-curve` vs `Linear`
+  - software optimization to prevent misstepping
+  - lower parked motor current and other motion-quality tuning
+- Trinamic documents reinforce that driver-level features such as interpolation and chopper-mode tuning matter, but those alone are not enough if the higher-level motion planner chatters.
 
 ## Phase 3: Second Axis Bring-Up
-- Add the second axis on top of the same architecture:
+- Add the second axis on top of the same architecture only after the new one-axis motion-quality milestone is met:
   - shared DMX receiver
   - one PIO step generator per axis
   - shared UART configuration logic
-- Keep the one-axis smooth-ramp workflow passing while the second axis is added.
+- Keep the refreshed one-axis smooth-motion regression passing while the second axis is added.
 
 ## Phase 4: Dual-Axis Optical Validation
 - Extend the smooth-ramp workflow to score both visible traces.
@@ -116,8 +144,9 @@ For MVP, homing and runtime fault handling should be based on `UART StallGuard`,
 - Treat a runtime test as incomplete unless the OpenCV trace is available when optical proof is expected.
 
 ## Recommended Order From Here
-1. Lock the default one-axis full-span runtime to the intended `~2 s` target at `1/128`.
-2. Treat the one-axis smooth-ramp workflow as the baseline regression check.
-3. Add the second axis and repeat functional runtime validation under load.
-4. Extend the optical ramp workflow to score both axes together.
-5. Add soak and fault-handling checks before revisiting external `DIAG`.
+1. Remove visible one-axis DMX jitter with filtering, deadband, and/or a better internal motion profile.
+2. Re-prove one-axis smooth motion optically with the current fixed-span runtime.
+3. Revisit the exact `~2 s` traverse target only after the motion quality is acceptable.
+4. Add the second axis and repeat functional runtime validation under load.
+5. Extend the optical ramp workflow to score both axes together.
+6. Add soak and fault-handling checks before revisiting external `DIAG`.

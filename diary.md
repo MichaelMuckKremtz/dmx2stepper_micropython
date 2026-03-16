@@ -170,3 +170,49 @@
 - The `1/128` runtime is much faster now than the initial bring-up.
 - The exact default full-span runtime is not locked to `2.0 s` yet.
 - The next focused task is to pin that default traverse time cleanly before returning to second-axis work.
+
+### Fixed-Span Runtime Follow-Up
+- Live visual checks showed that using the measured StallGuard span directly caused repeated end-stop contact during DMX moves.
+- I changed the startup flow so it now:
+  - seeks one end only with `UART StallGuard`
+  - backs off that end
+  - moves to center inside a fixed logical travel window
+- I then tuned the logical travel window downward in stages while watching the live motion:
+  - `23000`
+  - `20000`
+  - `10000`
+- The current logical travel window is `10000` microsteps.
+
+### Soft-End Margin Follow-Up
+- Defining the runtime range directly as `0..travel_steps` still let DMX full-low/full-high target the hard-stop coordinates.
+- I added a runtime soft-end margin so the active DMX target range is inside the fixed travel window instead of on the hard stops.
+- Current setting:
+  - fixed travel window `10000`
+  - soft-end margin `1000`
+  - full-scale DMX currently maps into `1000..9000`
+
+### What The Latest Visual Tests Show
+- Startup homing remains mechanically smooth and repeatable enough to keep building on.
+- Under live DMX control, the motion is still visibly more jittery than startup homing.
+- The jitter is present even when the console is not intentionally changing values, which strongly suggests that the current runtime planner is too eager to react to tiny target updates.
+- One headless margin-enabled run also ended with the controller still in motion rather than cleanly parked at the final high target, which is another sign that the current runtime motion path needs refinement.
+
+### Research Direction For Commercial-Grade Smoothness
+- I checked current fixture and motor-control references to understand what commercial moving heads do differently.
+- The recurring themes were:
+  - `16-bit` pan/tilt positioning
+  - tracking vs vector-style motion control
+  - digital filtering of small tracking updates
+  - selectable motion curves such as `S-curve` vs `Linear`
+  - encoder calibration / encoder feedback
+  - firmware-side optimization specifically to prevent pan/tilt misstepping
+- The practical takeaway for this repo is that the next milestone should be motion quality on one axis, not second-axis bring-up.
+
+### Updated Conclusion
+- The architecture is no longer the main blocker.
+- The active blocker is runtime motion quality under live DMX.
+- The next milestone is to make one-axis DMX motion feel closer to a commercial moving head:
+  - add deadband and/or filtering
+  - consider a vector-style internal move profile
+  - re-prove one-axis smooth motion optically on the current runtime
+- Second-axis work should resume only after that milestone is met.

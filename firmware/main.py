@@ -49,6 +49,15 @@ def map_u16_to_steps(value, span_steps):
     return (value * span_steps + 32767) // 65535
 
 
+def map_u16_to_steps_with_margin(value, span_steps, margin_steps):
+    span_steps = max(1, int(span_steps))
+    margin_steps = max(0, int(margin_steps))
+    usable_low = min(margin_steps, span_steps // 2)
+    usable_high = max(usable_low, span_steps - usable_low)
+    usable_span = max(0, usable_high - usable_low)
+    return usable_low + map_u16_to_steps(value, usable_span)
+
+
 def stallguard_adjustment(microsteps):
     return max(1.0, float(microsteps) / 8.0)
 
@@ -209,7 +218,13 @@ class ChunkedPositionController:
         self.acceleration_steps_s2 = float(max(config.RUNTIME_MIN_ACCEL_STEPS_S2, int(snapshot["acceleration_steps_s2"])))
         self.enabled = bool(snapshot["enabled"])
         if self.enabled:
-            self.target_position_steps = int(map_u16_to_steps(snapshot["target_u16"], self.span_steps))
+            self.target_position_steps = int(
+                map_u16_to_steps_with_margin(
+                    snapshot["target_u16"],
+                    self.span_steps,
+                    config.RUNTIME_SOFT_END_MARGIN_STEPS,
+                )
+            )
         else:
             self.hold_position()
 
@@ -447,7 +462,7 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
     axis = build_axis(step_pin, dir_pin, axis_slot)
     home_retract_steps = scaled_home_steps(config.HOME_RETRACT_STEPS)
     home_release_steps = scaled_home_steps(config.HOME_RELEASE_STEPS)
-    min_travel_steps = scaled_home_steps(config.HOME_MIN_TRAVEL_STEPS)
+    fixed_travel_steps = max(1, int(config.HOME_FIXED_TRAVEL_STEPS))
     home_retract_speed_hz = scaled_home_speed(config.HOME_RETRACT_SPEED_HZ)
     home_release_speed_hz = scaled_home_speed(config.HOME_RELEASE_SPEED_HZ)
     status = {
@@ -500,10 +515,12 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
             status["stop_reason"] = "first_end_" + first_end["stop_reason"]
             return status
 
-        if home_release_steps > 0:
+        status["travel_steps"] = int(fixed_travel_steps)
+        release_target_steps = min(home_release_steps, status["travel_steps"] // 2)
+        if release_target_steps > 0:
             status["release_steps"] = int(
                 axis.move_fixed_steps_blocking(
-                    home_release_steps,
+                    release_target_steps,
                     -home_direction,
                     home_release_speed_hz,
                     poll_ms=config.HOME_POLL_MS,
@@ -512,39 +529,22 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
             debug_log("[trial] release completed steps={}".format(status["release_steps"]))
             time.sleep_ms(config.HOME_SETTLE_MS)
 
-        second_end = seek_endstop_uart(driver, axis, -home_direction, speed_hz, "second_end")
-        status["second_end"] = second_end
-        if not second_end["success"]:
-            status["stop_reason"] = "second_end_" + second_end["stop_reason"]
-            return status
-
-        status["travel_steps"] = int(status["release_steps"] + second_end["search_steps"])
-        if status["travel_steps"] < min_travel_steps:
-            status["stop_reason"] = "measured_span_too_small"
-            debug_log(
-                "[trial] rejecting span={} steps because it is below minimum {}".format(
-                    status["travel_steps"],
-                    min_travel_steps,
-                )
-            )
-            return status
-
-        status["center_steps_requested"] = int(status["travel_steps"] // 2)
+        status["center_steps_requested"] = max(0, int(status["travel_steps"] // 2) - int(status["release_steps"]))
         status["center_steps_moved"] = int(
             axis.move_fixed_steps_blocking(
                 status["center_steps_requested"],
-                home_direction,
+                -home_direction,
                 home_release_speed_hz,
                 poll_ms=config.HOME_POLL_MS,
             )
         )
         status["centered"] = status["center_steps_moved"] >= status["center_steps_requested"]
         status["success"] = bool(status["centered"])
-        status["stop_reason"] = "uart_centered" if status["success"] else "center_move_incomplete"
+        status["stop_reason"] = "fixed_span_centered" if status["success"] else "center_move_incomplete"
         time.sleep_ms(config.HOME_SETTLE_MS)
 
         debug_log(
-            "[trial] travel={} center_requested={} center_moved={} success={}".format(
+            "[trial] fixed_travel={} center_requested={} center_moved={} success={}".format(
                 status["travel_steps"],
                 status["center_steps_requested"],
                 status["center_steps_moved"],

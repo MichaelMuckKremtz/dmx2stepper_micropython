@@ -25,17 +25,25 @@ Current firmware defaults at `DMX=0` for channels `3..7` are:
 - acceleration: `200000 steps/s^2`
 - enabled: `true`
 
+Current one-axis runtime geometry defaults are:
+
+- startup homing: single-end `UART StallGuard`
+- fixed logical travel window: `10000` microsteps
+- runtime soft-end margin: `1000` microsteps
+- full-scale DMX position range with the current margin: `1000..9000`
+
 ## Current Status
 
 - DMX reception on the RP2040 is implemented with PIO.
 - Step generation is implemented with PIO.
 - TMC2209 configuration is handled over UART for microsteps, current, and driver control.
 - The active firmware is currently running at `1/128` microstepping.
-- Single-axis startup homing is working with UART StallGuard and has been optically verified.
+- Single-axis startup homing now seeks one end only with `UART StallGuard`, backs off, and moves to center inside a fixed logical span.
 - After homing, the active firmware moves to center and enters one-axis DMX runtime.
 - One-axis runtime at 44 FPS DMX input has been validated functionally.
-- One-axis smooth-ramp runtime motion has now passed optical verification with the current HIL workflow.
-- Recent `1/128` bring-up measured startup homing at about `14.2 s` and end-to-end span at about `24.5k` microsteps.
+- The current fixed-span runtime is being manually tuned against end-stop contact and visible jitter under live DMX control.
+- Recent runtime tuning switched from measured end-to-end travel to a fixed logical travel window plus soft-end margins because measured StallGuard spans were larger than the real safe motion range.
+- The earlier one-axis smooth-ramp optical pass is now historical evidence for a previous tuning state, not the active regression baseline for the latest runtime settings.
 - External `DIAG` is not part of the current MVP path.
 
 ## MVP Direction
@@ -43,9 +51,9 @@ Current firmware defaults at `DMX=0` for channels `3..7` are:
 The current MVP path is:
 
 1. Reliable startup homing with PIO steps and UART StallGuard.
-2. Optically verified one-axis DMX runtime.
-3. Second-axis bring-up with the same architecture.
-4. Dual-axis validation under sustained 44 FPS DMX input.
+2. One-axis DMX runtime that remains smooth under live DMX updates, not just under scripted bring-up checks.
+3. Re-establish optically verified one-axis smooth motion with the current runtime mapping and limits.
+4. Second-axis bring-up with the same architecture only after the one-axis motion quality is acceptable.
 
 The axis homes on startup, moves to center, and then responds to the DMX channels above.
 
@@ -102,7 +110,7 @@ The default workflow uses [hil/scenarios/smooth_position_ramp.csv](hil/scenarios
 
 ## Next Steps
 
-- Lock the default one-axis full-span move to the intended `~2 s` runtime target at `1/128` microstepping.
-- Bring up the second axis with the same PIO + UART architecture.
-- Validate dual-axis runtime under sustained DMX load.
-- Add soak and fault-handling validation for MVP.
+- Make live DMX motion look commercially smooth on one axis.
+- Re-establish a passing optical smooth-ramp check for the current runtime mapping.
+- Only then resume second-axis bring-up and dual-axis validation.
+- Add soak and fault-handling validation after the motion-quality milestone.

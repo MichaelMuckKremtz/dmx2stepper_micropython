@@ -2,15 +2,40 @@
 
 RP2040-based DMX-to-stepper controller firmware with PIO DMX input, PIO step generation, TMC2209 UART control, UART StallGuard homing, and OpenCV-based hardware-in-the-loop verification.
 
+## DMX Channel Map
+
+The active one-axis runtime currently uses:
+
+| Channel | Meaning | Notes |
+| --- | --- | --- |
+| 1 | position MSB | 16-bit position target |
+| 2 | position LSB | 16-bit position target |
+| 3 | run current | `0..9` = firmware default, `10..255` = active range |
+| 4 | hold current | `0..9` = firmware default, `10..255` = active range |
+| 5 | max speed | `0..9` = firmware default, `10..255` = active range |
+| 6 | acceleration | `0..9` = firmware default, `10..255` = active range |
+| 7 | enable | `0..9` = default enabled, `10..127` = disable, `128..255` = enable |
+
+Current firmware defaults at `DMX=0` for channels `3..7` are:
+
+- microsteps: `1/128`
+- run current: `24`
+- hold current: `12`
+- max speed: `30000 steps/s`
+- acceleration: `200000 steps/s^2`
+- enabled: `true`
+
 ## Current Status
 
 - DMX reception on the RP2040 is implemented with PIO.
 - Step generation is implemented with PIO.
 - TMC2209 configuration is handled over UART for microsteps, current, and driver control.
+- The active firmware is currently running at `1/128` microstepping.
 - Single-axis startup homing is working with UART StallGuard and has been optically verified.
 - After homing, the active firmware moves to center and enters one-axis DMX runtime.
 - One-axis runtime at 44 FPS DMX input has been validated functionally.
 - One-axis smooth-ramp runtime motion has now passed optical verification with the current HIL workflow.
+- Recent `1/128` bring-up measured startup homing at about `14.2 s` and end-to-end span at about `24.5k` microsteps.
 - External `DIAG` is not part of the current MVP path.
 
 ## MVP Direction
@@ -22,15 +47,7 @@ The current MVP path is:
 3. Second-axis bring-up with the same architecture.
 4. Dual-axis validation under sustained 44 FPS DMX input.
 
-## Current DMX Runtime Behavior
-
-The current runtime build is configured for simple manual testing:
-
-- Channel 1: position MSB
-- Channel 2: position LSB
-- Channels 3-7: ignored in the current `position-only` runtime mode
-
-The axis homes on startup, moves to center, and then responds to channels 1 and 2.
+The axis homes on startup, moves to center, and then responds to the DMX channels above.
 
 ## Repository Layout
 
@@ -85,6 +102,7 @@ The default workflow uses [hil/scenarios/smooth_position_ramp.csv](hil/scenarios
 
 ## Next Steps
 
+- Lock the default one-axis full-span move to the intended `~2 s` runtime target at `1/128` microstepping.
 - Bring up the second axis with the same PIO + UART architecture.
 - Validate dual-axis runtime under sustained DMX load.
 - Add soak and fault-handling validation for MVP.

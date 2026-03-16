@@ -24,11 +24,23 @@ def write_json(path, payload):
         handle.write(json.dumps(payload))
 
 
-def map_byte(value, low, high):
+def map_dmx_parameter(value, low, high, default):
     value = clamp(value, 0, 255)
+    if value < int(config.DMX_PARAMETER_ACTIVE_MIN):
+        return int(default)
+
     low = int(low)
     high = int(high)
-    return low + ((high - low) * value + 127) // 255
+    active_span = 255 - int(config.DMX_PARAMETER_ACTIVE_MIN)
+    scaled = value - int(config.DMX_PARAMETER_ACTIVE_MIN)
+    return low + ((high - low) * scaled + (active_span // 2)) // active_span
+
+
+def map_dmx_enable(value):
+    value = clamp(value, 0, 255)
+    if value < int(config.DMX_PARAMETER_ACTIVE_MIN):
+        return bool(config.RUNTIME_DEFAULT_ENABLED)
+    return value >= int(config.ENABLE_THRESHOLD)
 
 
 def map_u16_to_steps(value, span_steps):
@@ -41,15 +53,29 @@ def stallguard_adjustment(microsteps):
     return max(1.0, float(microsteps) / 8.0)
 
 
+def microstep_distance_adjustment(microsteps):
+    return max(1.0, float(microsteps) / 16.0)
+
+
 def home_speed_trials():
     adjustment = stallguard_adjustment(config.MICROSTEP_MODE)
+    min_freq = int(round(float(config.HOME_MIN_FREQ_1_8_HZ) * adjustment))
+    max_freq = int(round(float(config.HOME_MAX_FREQ_1_8_HZ) * adjustment))
     speeds = []
     for requested in config.HOME_SPEED_TRIALS_1_8_HZ:
         scaled = int(float(requested) * adjustment)
-        clamped = clamp(scaled, config.HOME_MIN_FREQ_1_8_HZ, config.HOME_MAX_FREQ_1_8_HZ)
+        clamped = clamp(scaled, min_freq, max_freq)
         if clamped not in speeds:
             speeds.append(clamped)
     return tuple(speeds)
+
+
+def scaled_home_steps(base_steps):
+    return max(1, int(round(float(base_steps) * microstep_distance_adjustment(config.MICROSTEP_MODE))))
+
+
+def scaled_home_speed(base_speed_hz):
+    return max(1, int(round(float(base_speed_hz) * microstep_distance_adjustment(config.MICROSTEP_MODE))))
 
 
 def median_int(values):
@@ -100,19 +126,31 @@ class SharedDMXState:
                 self.acceleration_steps_s2 = int(config.RUNTIME_DEFAULT_ACCEL_STEPS_S2)
                 self.enabled = bool(config.RUNTIME_DEFAULT_ENABLED)
             else:
-                self.run_current = map_byte(channels[2], 0, 31)
-                self.hold_current = map_byte(channels[3], 0, 31)
-                self.max_speed_hz = map_byte(
+                self.run_current = map_dmx_parameter(
+                    channels[2],
+                    config.RUNTIME_MIN_RUN_CURRENT,
+                    config.RUNTIME_MAX_RUN_CURRENT,
+                    config.DEFAULT_RUN_CURRENT,
+                )
+                self.hold_current = map_dmx_parameter(
+                    channels[3],
+                    config.RUNTIME_MIN_HOLD_CURRENT,
+                    config.RUNTIME_MAX_HOLD_CURRENT,
+                    config.DEFAULT_HOLD_CURRENT,
+                )
+                self.max_speed_hz = map_dmx_parameter(
                     channels[4],
                     config.RUNTIME_MIN_SPEED_HZ,
                     config.RUNTIME_MAX_SPEED_HZ,
+                    config.RUNTIME_DEFAULT_MAX_SPEED_HZ,
                 )
-                self.acceleration_steps_s2 = map_byte(
+                self.acceleration_steps_s2 = map_dmx_parameter(
                     channels[5],
                     config.RUNTIME_MIN_ACCEL_STEPS_S2,
                     config.RUNTIME_MAX_ACCEL_STEPS_S2,
+                    config.RUNTIME_DEFAULT_ACCEL_STEPS_S2,
                 )
-                self.enabled = int(channels[6]) >= int(config.ENABLE_THRESHOLD)
+                self.enabled = map_dmx_enable(channels[6])
             self.frame_count = int(frame_count)
             self.last_frame_ms = int(last_frame_ms)
             self.start_code_errors = int(start_code_errors)
@@ -300,11 +338,14 @@ def build_axis(step_pin, dir_pin, axis_slot):
 
 
 def seek_endstop_uart(driver, axis, direction, speed_hz, label):
-    timeout_ms = int((config.HOME_MAX_STEPS * 1000) / max(1.0, float(speed_hz))) + config.HOME_TIMEOUT_MARGIN_MS
+    max_home_steps = scaled_home_steps(config.HOME_MAX_STEPS)
+    min_stall_steps = scaled_home_steps(config.HOME_MIN_STALL_STEPS)
+    timeout_ms = int((max_home_steps * 1000) / max(1.0, float(speed_hz))) + config.HOME_TIMEOUT_MARGIN_MS
     status = {
         "label": label,
         "direction": int(direction),
         "speed_hz": int(speed_hz),
+        "max_home_steps": int(max_home_steps),
         "search_steps": 0,
         "search_elapsed_ms": 0,
         "last_sg": None,
@@ -348,7 +389,7 @@ def seek_endstop_uart(driver, axis, direction, speed_hz, label):
                             median_int(status["startup_sg_values"]),
                         )
                     )
-            elif steps >= config.HOME_MIN_STALL_STEPS:
+            elif steps >= min_stall_steps:
                 threshold = int(status["uart_threshold"])
                 if sg <= threshold:
                     low_sg_count += 1
@@ -378,7 +419,7 @@ def seek_endstop_uart(driver, axis, direction, speed_hz, label):
     search = axis.run_until(
         direction=direction,
         speed_hz=speed_hz,
-        max_steps=config.HOME_MAX_STEPS,
+        max_steps=max_home_steps,
         stop_fn=stop_fn,
         poll_ms=config.HOME_POLL_MS,
         timeout_ms=timeout_ms,
@@ -404,6 +445,11 @@ def seek_endstop_uart(driver, axis, direction, speed_hz, label):
 
 def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, speed_hz, trial_index):
     axis = build_axis(step_pin, dir_pin, axis_slot)
+    home_retract_steps = scaled_home_steps(config.HOME_RETRACT_STEPS)
+    home_release_steps = scaled_home_steps(config.HOME_RELEASE_STEPS)
+    min_travel_steps = scaled_home_steps(config.HOME_MIN_TRAVEL_STEPS)
+    home_retract_speed_hz = scaled_home_speed(config.HOME_RETRACT_SPEED_HZ)
+    home_release_speed_hz = scaled_home_speed(config.HOME_RELEASE_SPEED_HZ)
     status = {
         "trial_index": int(trial_index),
         "axis_slot": int(axis_slot),
@@ -436,12 +482,12 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
     )
 
     try:
-        if config.HOME_RETRACT_STEPS > 0:
+        if home_retract_steps > 0:
             status["retract_steps"] = int(
                 axis.move_fixed_steps_blocking(
-                    config.HOME_RETRACT_STEPS,
+                    home_retract_steps,
                     -home_direction,
-                    config.HOME_RETRACT_SPEED_HZ,
+                    home_retract_speed_hz,
                     poll_ms=config.HOME_POLL_MS,
                 )
             )
@@ -454,12 +500,12 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
             status["stop_reason"] = "first_end_" + first_end["stop_reason"]
             return status
 
-        if config.HOME_RELEASE_STEPS > 0:
+        if home_release_steps > 0:
             status["release_steps"] = int(
                 axis.move_fixed_steps_blocking(
-                    config.HOME_RELEASE_STEPS,
+                    home_release_steps,
                     -home_direction,
-                    config.HOME_RELEASE_SPEED_HZ,
+                    home_release_speed_hz,
                     poll_ms=config.HOME_POLL_MS,
                 )
             )
@@ -473,12 +519,12 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
             return status
 
         status["travel_steps"] = int(status["release_steps"] + second_end["search_steps"])
-        if status["travel_steps"] < int(config.HOME_MIN_TRAVEL_STEPS):
+        if status["travel_steps"] < min_travel_steps:
             status["stop_reason"] = "measured_span_too_small"
             debug_log(
                 "[trial] rejecting span={} steps because it is below minimum {}".format(
                     status["travel_steps"],
-                    config.HOME_MIN_TRAVEL_STEPS,
+                    min_travel_steps,
                 )
             )
             return status
@@ -488,7 +534,7 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
             axis.move_fixed_steps_blocking(
                 status["center_steps_requested"],
                 home_direction,
-                config.HOME_RELEASE_SPEED_HZ,
+                home_release_speed_hz,
                 poll_ms=config.HOME_POLL_MS,
             )
         )

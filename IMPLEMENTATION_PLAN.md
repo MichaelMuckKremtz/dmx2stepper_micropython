@@ -12,16 +12,26 @@
   - run current
   - hold current
   - driver enable/disable, because `EN` is hardwired to `GND`
+- The current active runtime is at `1/128` microstepping.
 - Single-axis startup homing with `UART StallGuard` is working.
 - Single-axis homing plus centering has already passed optical validation.
 - One-axis DMX runtime at `44 fps` has been validated functionally.
 - The runtime firmware is now quiet by default:
   - RP2040 `print()` output is disabled unless explicitly enabled for debugging
+- DMX channels `3..7` are now live again with:
+  - channels `1..2` = 16-bit position target
+  - channels `3..6` = run current, hold current, max speed, acceleration
+  - channel `7` = enable
+  - values `0..9` preserving firmware defaults for channels `3..7`
+  - values `10..255` activating the configured runtime ranges
 - A smooth-ramp verification workflow now exists:
   - DMX scenario generation
   - OpenCV capture
   - trace smoothness scoring
 - One-axis smooth-ramp runtime motion has now passed optical verification.
+- Recent `1/128` bring-up measured:
+  - startup homing at about `14.2 s`
+  - end-to-end travel at about `24.5k` microsteps
 
 ## MVP Goal
 Ship a reliable first firmware that can:
@@ -71,6 +81,7 @@ For MVP, homing and runtime fault handling should be based on `UART StallGuard`,
 - One-axis runtime has functional proof.
 - One-axis smooth runtime motion now has optical proof.
 - The smooth-ramp verifier is the regression check for further runtime changes.
+- The new `1/128` default runtime is substantially faster, but the exact `~2 s` full-span target still needs one final clean timing measurement.
 
 ## Phase 3: Second Axis Bring-Up
 - Add the second axis on top of the same architecture:
@@ -105,7 +116,8 @@ For MVP, homing and runtime fault handling should be based on `UART StallGuard`,
 - Treat a runtime test as incomplete unless the OpenCV trace is available when optical proof is expected.
 
 ## Recommended Order From Here
-1. Treat the one-axis smooth-ramp workflow as the baseline regression check.
-2. Add the second axis and repeat functional runtime validation under load.
-3. Extend the optical ramp workflow to score both axes together.
-4. Add soak and fault-handling checks before revisiting external `DIAG`.
+1. Lock the default one-axis full-span runtime to the intended `~2 s` target at `1/128`.
+2. Treat the one-axis smooth-ramp workflow as the baseline regression check.
+3. Add the second axis and repeat functional runtime validation under load.
+4. Extend the optical ramp workflow to score both axes together.
+5. Add soak and fault-handling checks before revisiting external `DIAG`.

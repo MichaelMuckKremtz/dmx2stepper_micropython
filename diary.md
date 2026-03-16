@@ -136,3 +136,37 @@
 - Milestone 2 is now complete both functionally and optically.
 - The smooth-ramp workflow is the correct regression check before further runtime changes.
 - The next engineering step is second-axis bring-up, not more one-axis firmware refactoring.
+
+### DMX Channel Follow-Up
+- The one-axis runtime no longer stays in `position-only` mode.
+- The active DMX contract is now:
+  - channel `1` = position MSB
+  - channel `2` = position LSB
+  - channel `3` = run current
+  - channel `4` = hold current
+  - channel `5` = max speed
+  - channel `6` = acceleration
+  - channel `7` = enable
+- For channels `3..7`, values `0..9` preserve firmware defaults and values `10..255` activate the configured runtime range.
+
+### 1/128 Microstep Bring-Up
+- I changed the active microstep mode from `1/16` to `1/128`.
+- That required scaling the homing path for the finer step size:
+  - homing search distances
+  - retract/release distances
+  - homing speeds
+- Measured results from the `1/128` bring-up:
+  - startup homing takes about `14.2 s`
+  - end-to-end travel is about `24.5k` microsteps
+- I also raised the default runtime speed, acceleration, and chunking limits substantially so the default full-span move can be pushed toward the intended `~2 s` target.
+
+### New Scenarios
+- Added:
+  - `hil/scenarios/end_to_end_default.csv`
+  - `hil/scenarios/end_to_end_speed_max.csv`
+- These are for direct end-to-end runtime timing checks at the current microstep setting.
+
+### Current Status Of The 2-Second Goal
+- The `1/128` runtime is much faster now than the initial bring-up.
+- The exact default full-span runtime is not locked to `2.0 s` yet.
+- The next focused task is to pin that default traverse time cleanly before returning to second-axis work.

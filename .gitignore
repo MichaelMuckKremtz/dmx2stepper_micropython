@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+.DS_Store
+._*
+
+backups/
+
+hil/captures/
+
+puzzle_pieces/ola_remote/graphs/
+puzzle_pieces/opencv_hsl_test/markers/*.png
+puzzle_pieces/opencv_hsl_test/markers/stl/

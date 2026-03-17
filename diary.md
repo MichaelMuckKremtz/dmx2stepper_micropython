@@ -1,5 +1,32 @@
 # Diary
 
+## 2026-03-17
+
+### Current State
+- One-sided startup homing is working again in the active firmware.
+- DMX input is back to the simpler, more reliable runtime path.
+- The active fixed logical travel window is now `20000` microsteps with a `1000` step soft-end margin.
+
+### New Priority Task
+- Build a new DMX motion-validation scenario that combines:
+  - linear ramps at different speeds
+  - discrete jumps between positions
+  - a slow sine wave with increasing amplitude
+- The scoring path should use the output data of the still-running video app instead of depending only on one-shot capture runs or DMX stimulus logs.
+
+### Why This Is Next
+- The current smooth-ramp workflow is still useful, but it is too narrow to represent the kind of motion changes that are currently exposing runtime quality problems.
+- A longer-lived mixed-motion scenario should be a better regression stimulus for:
+  - target tracking stability
+  - response to abrupt position changes
+  - behaviour under gradually increasing oscillation
+  - consistency between manual viewing and automated scoring
+
+### Expected Direction
+- Keep `vision_observer.py` running continuously during the scenario.
+- Reuse that observer output as the analysis input for the new mixed-motion test.
+- Use the resulting trace to tune runtime filtering, deadband, and motion planning before returning to second-axis work.
+
 ## 2026-03-16
 
 ### Goal

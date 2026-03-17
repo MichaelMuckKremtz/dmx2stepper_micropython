@@ -272,8 +272,8 @@ def write_log_rows(writer, command_label: str, rows: Iterable[tuple[int, int, st
         )
 
 
-def send_payload(backend: Backend, dmx_values: List[int], max_channel: int) -> None:
-    payload = bytes(dmx_values[: max(max_channel, 1)])
+def send_payload(backend: Backend, dmx_values: List[int], max_channel: int, min_channels: int) -> None:
+    payload = bytes(dmx_values[: max(max_channel, max(1, int(min_channels)))])
     backend.send(payload)
 
 
@@ -288,7 +288,7 @@ def run_set_command(args, backend: Backend, writer) -> None:
         max_channel = max(max_channel, channel)
 
     now = time.monotonic()
-    send_payload(backend, dmx_values, max_channel)
+    send_payload(backend, dmx_values, max_channel, args.min_channels)
     write_log_rows(writer, args.scenario_name, changed, now)
     if args.hold_s > 0:
         time.sleep(args.hold_s)
@@ -342,7 +342,7 @@ def run_timeline(commands: List[ScheduledCommand], args, backend: Backend, write
             if send_rows:
                 for channel, _, _ in send_rows:
                     max_channel = max(max_channel, channel)
-                send_payload(backend, dmx_values, max_channel)
+                send_payload(backend, dmx_values, max_channel, args.min_channels)
                 write_log_rows(writer, label, send_rows, now)
 
             next_tick += 1.0 / args.fps
@@ -360,6 +360,7 @@ def build_argument_parser():
     parser.add_argument("--output-dir", default=str(DEFAULT_CAPTURE_DIR), help="Directory for timestamped output CSV")
     parser.add_argument("--prefix", default="dmx", help="Filename prefix when --output is not set")
     parser.add_argument("--scenario-name", default="manual", help="Scenario label written to the CSV")
+    parser.add_argument("--min-channels", type=int, default=8, help="Minimum number of DMX slots to transmit in each frame")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 

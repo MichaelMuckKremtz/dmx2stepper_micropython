@@ -8,6 +8,11 @@ CAPTURE_DIR = Path(__file__).resolve().parent / "captures"
 RESOLUTION = (640, 480)
 ROTATE_180 = True
 
+STREAM_BIND_HOST = "0.0.0.0"
+STREAM_PORT = 8080
+STREAM_MAX_FPS = 10.0
+STREAM_JPEG_QUALITY = 80
+
 # Camera controls are optional. Keep them as None unless tuned on the target Pi.
 AWB_MODE = None
 EXPOSURE_COMPENSATION = None

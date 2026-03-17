@@ -208,6 +208,8 @@ def build_argument_parser():
         default=8.0,
         help="Maximum allowed distance between the final settled angle and the observed midpoint",
     )
+    parser.add_argument("--vision-filter-window", type=int, default=None, help="Override observer median filter window")
+    parser.add_argument("--vision-deadband-deg", type=float, default=None, help="Override observer deadband")
     return parser
 
 
@@ -234,6 +236,10 @@ def main() -> int:
         "--prefix",
         "vision_homing",
     ]
+    if args.vision_filter_window is not None:
+        vision_cmd.extend(["--filter-window", str(args.vision_filter_window)])
+    if args.vision_deadband_deg is not None:
+        vision_cmd.extend(["--deadband-deg", str(args.vision_deadband_deg)])
 
     vision_proc = subprocess.Popen(vision_cmd, cwd=str(HIL_DIR))
     firmware_proc = None

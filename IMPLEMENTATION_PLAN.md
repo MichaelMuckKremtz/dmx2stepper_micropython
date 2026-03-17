@@ -34,7 +34,7 @@
   - seek one end with `UART StallGuard`
   - back off that end
   - move to center inside a fixed logical travel window
-- The current fixed logical travel window is `10000` microsteps with a `1000` step soft-end margin, so full-scale DMX currently maps into `1000..9000`.
+- The current fixed logical travel window is `20000` microsteps with a `1000` step soft-end margin, so full-scale DMX currently maps into `1000..19000`.
 - Recent live-DMX tuning confirmed a new limitation:
   - startup homing remains smooth
   - live DMX motion is still visibly jittery and can hit soft limits or mis-track under aggressive changes
@@ -92,6 +92,11 @@ For MVP, homing and runtime fault handling should be based on `UART StallGuard`,
 
 ## New Immediate Milestone: Commercial-Grade One-Axis Motion
 - Before bringing up the second axis, make one-axis live DMX motion look and feel closer to a commercial moving head.
+- Add a new mixed-motion DMX stimulus that includes:
+  - linear ramps at multiple speeds
+  - discrete jumps between positions
+  - a slow sine wave with increasing amplitude
+- Drive scoring from the output of the continuously running `vision_observer.py` process so the same long-lived video path is used for both manual watching and automated analysis.
 - Working assumptions from fixture and motor-control references:
   - keep `16-bit` pan/tilt style targeting
   - add fixture-side filtering / deadband so small DMX changes do not create visible chatter
@@ -144,9 +149,10 @@ For MVP, homing and runtime fault handling should be based on `UART StallGuard`,
 - Treat a runtime test as incomplete unless the OpenCV trace is available when optical proof is expected.
 
 ## Recommended Order From Here
-1. Remove visible one-axis DMX jitter with filtering, deadband, and/or a better internal motion profile.
-2. Re-prove one-axis smooth motion optically with the current fixed-span runtime.
-3. Revisit the exact `~2 s` traverse target only after the motion quality is acceptable.
-4. Add the second axis and repeat functional runtime validation under load.
-5. Extend the optical ramp workflow to score both axes together.
-6. Add soak and fault-handling checks before revisiting external `DIAG`.
+1. Build the mixed-motion DMX scenario and wire it to consume the continuously running video observer output.
+2. Remove visible one-axis DMX jitter with filtering, deadband, and/or a better internal motion profile.
+3. Re-prove one-axis smooth motion optically with both the mixed-motion scenario and the existing smooth-ramp check.
+4. Revisit the exact `~2 s` traverse target only after the motion quality is acceptable.
+5. Add the second axis and repeat functional runtime validation under load.
+6. Extend the optical ramp workflow to score both axes together.
+7. Add soak and fault-handling checks before revisiting external `DIAG`.

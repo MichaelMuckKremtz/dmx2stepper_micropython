@@ -28,9 +28,9 @@ Current firmware defaults at `DMX=0` for channels `3..7` are:
 Current one-axis runtime geometry defaults are:
 
 - startup homing: single-end `UART StallGuard`
-- fixed logical travel window: `10000` microsteps
+- fixed logical travel window: `20000` microsteps
 - runtime soft-end margin: `1000` microsteps
-- full-scale DMX position range with the current margin: `1000..9000`
+- full-scale DMX position range with the current margin: `1000..19000`
 
 ## Current Status
 
@@ -92,6 +92,37 @@ Direct deploy only:
 bash firmware/deploy.sh /dev/ttyACM0
 ```
 
+## Live Ethernet Camera Stream
+
+Expose the Pi camera over HTTP/MJPEG while the same process continues doing the OpenCV angle tracking:
+
+```bash
+./run_camera_stream.sh
+```
+
+By default the stream binds to `0.0.0.0:8080`. Open `http://<pi-ip>:8080/` from another machine on the same Ethernet network.
+
+Direct usage is also available if you want to change the bind settings or logging behaviour:
+
+```bash
+python3 hil/vision_observer.py --stream --stream-host 0.0.0.0 --stream-port 8080
+```
+
+The stream is served from the same `vision_observer.py` capture loop, so OpenCV tracking and remote viewing share one camera client instead of fighting over the device.
+
+Existing HIL scripts can enable the same stream without extra code changes by exporting the inherited environment variables before launch:
+
+```bash
+VISION_STREAM=1 VISION_STREAM_PORT=8080 ./run_smooth_ramp_check.sh --upload
+```
+
+Optional environment knobs:
+
+- `VISION_STREAM_HOST`
+- `VISION_STREAM_PORT`
+- `VISION_STREAM_FPS`
+- `VISION_STREAM_JPEG_QUALITY`
+
 ## Smooth Ramp Verification
 
 Run a long eased DMX position-ramp and score the OpenCV trace for monotonicity, backtracking, and frame-to-frame jumps:
@@ -108,8 +139,52 @@ The default workflow uses [hil/scenarios/smooth_position_ramp.csv](hil/scenarios
 - a copied Pico runtime status
 - a summary JSON with smoothness metrics
 
+## Idle No-Step Verification
+
+Run a headless regression that fails if the runtime emits any steps while disabled or after reaching a fixed target:
+
+```bash
+python3 hil/verify_idle_no_steps.py --mode disabled-idle --upload
+python3 hil/verify_idle_no_steps.py --mode fixed-target
+```
+
+Optional raw vision capture can be added for a secondary spot check:
+
+```bash
+python3 hil/verify_idle_no_steps.py --mode disabled-idle --with-vision --vision-filter-window 1 --vision-deadband-deg 0
+```
+
+## Jump-Hold Runtime Diagnostics
+
+Run no-ramp position jumps with hold windows while polling Pico telemetry:
+
+```bash
+python3 hil/verify_jump_hold_runtime.py --upload --with-vision --vision-filter-window 1 --vision-deadband-deg 0
+```
+
+This writes:
+
+- a DMX stimulus log
+- a polled runtime telemetry CSV
+- copied Pico homing/result JSON files
+- an optional raw-vision CSV
+- a summary JSON with hold-window details
+
+## Full Diagnostics Suite
+
+Run the current homing benchmark, no-step idle checks, and jump-hold runtime checks in one command:
+
+```bash
+python3 hil/run_motion_diagnostics.py --upload --with-vision
+```
+
 ## Next Steps
 
+- Build a mixed DMX validation scenario with:
+  - linear ramps at multiple speeds
+  - discrete jumps between positions
+  - a slow sine wave with growing amplitude
+- Score that scenario against the output of the continuously running video observer instead of relying on DMX logs alone.
 - Make live DMX motion look commercially smooth on one axis.
 - Re-establish a passing optical smooth-ramp check for the current runtime mapping.
 - Only then resume second-axis bring-up and dual-axis validation.

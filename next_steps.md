@@ -8,7 +8,7 @@
 - The active runtime is currently configured for `1/128` microstepping.
 - DMX channels `3..7` are live again, with `0..9` preserving firmware defaults and `10..255` activating runtime control.
 - The active startup path now homes to one end only, then uses a fixed logical travel window instead of a measured end-to-end span.
-- The current fixed logical travel window is `10000` microsteps with a `1000` step soft-end margin.
+- The current fixed logical travel window is `20000` microsteps with a `1000` step soft-end margin.
 - One-axis smooth-ramp runtime motion has historical optical proof, but not yet for the latest fixed-span runtime tuning.
 - A smooth-ramp verification workflow exists:
   - [hil/scenarios/smooth_position_ramp.csv](hil/scenarios/smooth_position_ramp.csv)
@@ -22,12 +22,20 @@
 
 ## Immediate Task List
 
-### Task 1: Make One-Axis DMX Motion Smooth
+### Task 1: Build A Mixed DMX Motion Scenario
+- Add a new DMX test scenario that combines:
+  - linear ramps at different speeds
+  - discrete jumps from one position to the next
+  - a slow sine wave whose amplitude increases over time
+- Make the scoring path consume the output of the continuously running video app instead of treating each sub-test as an isolated capture.
+- Treat this as the new primary regression stimulus for one-axis motion quality.
+
+### Task 2: Make One-Axis DMX Motion Smooth
 - Add enough target filtering, deadband, and/or internal vector-style motion planning that the fixture stops visibly chattering under steady DMX.
-- Keep manual visual tests in the loop while tuning this.
+- Use the new mixed-motion scenario as the primary tuning input, not only manual spot checks.
 - Treat the current fixed-span and soft-margin setup as the geometry baseline while solving motion quality.
 
-### Task 2: Refresh The Optical Baseline
+### Task 3: Refresh The Optical Baseline
 - Use:
   - `./run_smooth_ramp_check.sh --upload`
 - Expect:
@@ -35,9 +43,9 @@
   - a valid stimulus CSV
   - a valid runtime status JSON
   - a passing smoothness summary
-- Treat this as the regression check again only after the latest runtime tuning is optically clean.
+- Treat this as a secondary regression check after the mixed-motion scenario is wired into the continuously running video observer path.
 
-### Task 3: Capture Lessons From Commercial Fixtures
+### Task 4: Capture Lessons From Commercial Fixtures
 - Use the current research direction:
   - `16-bit` positioning
   - tracking vs vector-style motion control
@@ -46,18 +54,19 @@
   - encoder-based calibration / correction as future work
 - Translate those ideas into changes that are practical on the current RP2040 + TMC2209 hardware.
 
-### Task 4: Bring Up The Second Axis
+### Task 5: Bring Up The Second Axis
 - Add the second axis on the same `PIO` + `UART` architecture.
 - Keep the one-axis path working while adding the second step generator.
 - Re-run functional runtime checks under continuous `44 fps` DMX load only after the one-axis motion quality milestone is complete.
 
-### Task 5: Extend Optical Validation To Two Axes
+### Task 6: Extend Optical Validation To Two Axes
 - Add a dual-axis DMX scenario.
 - Extend the vision scoring to validate both traces in the same run.
 - Confirm that adding the second axis does not introduce timing instability or obvious motion artifacts.
 
 ## Next Milestone
 - Achieve one **commercially credible smooth one-axis DMX run** with:
+  - a passing mixed-motion scenario using the continuously running video observer output
   - no visible idle jitter under steady DMX
   - no obvious chatter when making small position changes
   - no end-stop contact during full-scale moves inside the current soft margins

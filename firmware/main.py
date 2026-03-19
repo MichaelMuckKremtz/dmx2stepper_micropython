@@ -2,6 +2,7 @@
 
 import _thread
 import json
+import machine
 import os
 import time
 
@@ -625,47 +626,10 @@ def run_centering_trial(driver, step_pin, dir_pin, axis_slot, home_direction, sp
         status["runtime_min_position_steps"] = int(runtime_min_position_steps)
         status["runtime_max_position_steps"] = int(runtime_max_position_steps)
 
-        second_release_target_steps = min(home_release_steps, measured_travel_steps // 2)
-        if measured_travel_enabled and second_release_target_steps > 0:
-            status["second_release_steps"] = int(
-                axis.move_fixed_steps_blocking(
-                    second_release_target_steps,
-                    home_direction,
-                    home_release_speed_hz,
-                    poll_ms=config.HOME_POLL_MS,
-                )
-            )
-            debug_log("[trial] second release completed steps={}".format(status["second_release_steps"]))
-            time.sleep_ms(config.HOME_SETTLE_MS)
-
-        if measured_travel_enabled:
-            status["center_steps_requested"] = max(
-                0,
-                int(measured_travel_steps // 2) - int(status["second_release_steps"]),
-            )
-            center_move_direction = int(home_direction)
-        else:
-            status["center_steps_requested"] = max(
-                0,
-                int(measured_travel_steps // 2) - int(status["release_steps"]),
-            )
-            center_move_direction = -int(home_direction)
-
-        status["center_steps_moved"] = int(
-            axis.move_fixed_steps_blocking(
-                status["center_steps_requested"],
-                center_move_direction,
-                home_release_speed_hz,
-                poll_ms=config.HOME_POLL_MS,
-            )
-        )
-        status["centered"] = status["center_steps_moved"] >= status["center_steps_requested"]
-        status["success"] = bool(status["centered"])
-        if status["success"]:
-            status["stop_reason"] = "measured_span_centered" if measured_travel_enabled else "fixed_span_centered"
-        else:
-            status["stop_reason"] = "center_move_incomplete"
-        time.sleep_ms(config.HOME_SETTLE_MS)
+        status["initial_position_steps"] = int(status["release_steps"])
+        status["centered"] = True
+        status["success"] = True
+        status["stop_reason"] = "backed_up"
 
         debug_log(
             "[trial] measured_travel={} runtime_travel={} center_requested={} center_moved={} success={}".format(
@@ -724,6 +688,8 @@ def dmx_worker(shared):
         if int(dmx.last_bytes_received) < int(required_bytes):
             continue
         channels = dmx.get_channels(config.DMX_START_CHANNEL, config.DMX_CHANNEL_COUNT)
+        if int(channels[7]) == 255:
+            machine.reset()
         shared.update_from_channels(
             channels,
             dmx.get_frame_count(),
@@ -878,6 +844,9 @@ def main():
             homing_trial["axis_slot"],
         )
         controller = ChunkedPositionController(runtime_axis, homing_trial["travel_steps"])
+        initial_pos = int(homing_trial.get("initial_position_steps", controller.span_steps // 2))
+        controller.current_position_steps = initial_pos
+        controller.target_position_steps = initial_pos
 
         shared = SharedDMXState()
         _thread.start_new_thread(dmx_worker, (shared,))

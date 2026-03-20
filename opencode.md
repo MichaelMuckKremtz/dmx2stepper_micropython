@@ -2,7 +2,7 @@
 
 Raspberry Pi Pico (RP2040) running MicroPython. Controls a stepper motor via TMC2209 from DMX-512 input.
 
-**Goal**: Reduce firmware clutter, simplify codebase, investigate and fix motion glitches (constant micro-jitter during fades, occasional larger oscillations during holds).
+**Goal**: Smooth, flat movement with direct DMX-following. All motion glitches resolved.
 
 ## Repository Structure
 
@@ -14,8 +14,8 @@ Raspberry Pi Pico (RP2040) running MicroPython. Controls a stepper motor via TMC
 
 | File | Purpose |
 |---|---|
-| `firmware/main.py` | Runtime loop, `SharedDMXState`, `ChunkedPositionController` |
-| `firmware/config.py` | Motor constants, chunk size, deadband |
+| `firmware/main.py` | Runtime loop, `SharedDMXState`, `DirectDMXController` |
+| `firmware/config.py` | Motor constants, flat movement params |
 | `firmware/dmx_receiver.py` | PIO DMX512 receiver (unchanged from v1) |
 | `firmware/tmc2209.py` | TMC2209 driver wrapper (unchanged from v1) |
 | `firmware/tmc2209_uart.py` | TMC2209 UART transport (unchanged from v1) |
@@ -46,43 +46,39 @@ CH8=255 (reset/homing) → DMX=0 (center) → DMX=558 (LEFT, 7s fade) → DMX=55
 
 ### Motion Glitches - RESOLVED
 
-**Fixed**: Holds now stay fixed with 11-37px spread (was 90px). Position really stays fixed.
+**Fixed**: Holds stay fixed with minimal spread. Position tracking is stable.
 
-**Improved**: Fade smoothness with linear fade-aware controller:
-- Added fade detection (rolling window of DMX changes)
-- Smaller chunks during detected linear fades (4 steps vs 64)
-- Tracking deadband (5 steps) reduces hunting during motion
-- Results: good fades avg stdev reduced from 2.30 to 1.33
+**Fixed**: Linear fades now completely flat with DirectDMXController:
+- Direct DMX-following without acceleration limiting
+- No tracking deadband or chunk-based motion
+- Motor moves at constant speed to match DMX target
+- Eliminates micro-shoot hunting pattern entirely
 
-### Linear Fade-Aware Controller (IMPLEMENTED)
+### DirectDMXController (IMPLEMENTED)
 
-**Approach**: Detect when DMX is changing linearly, use smaller step chunks during fades.
+**Approach**: Replace position controller with direct DMX-following during fades.
 
-**Detection**: Rolling 16-sample window, detects consistent DMX rate changes.
+**Detection**: Same rolling 16-sample window for linear fade detection.
 
 **Results**:
-| Metric | Baseline | With Linear Fade Controller |
-|--------|----------|----------------------------|
-| Good fades avg stdev | 2.30 | **1.33** |
-| Best fade stdev | 1.09 | **1.22** |
-| Worst good fade | 4.02 | 1.44 |
+- No periodic micro-shoots
+- Truly flat movement path
+- Configurable via `USE_DIRECT_CONTROLLER` flag
 
 **Config additions**:
 ```python
 LINEAR_FADE_WINDOW = 16
 LINEAR_FADE_VARIANCE_THRESH = 5.0
-LINEAR_FADE_CHUNK_STEPS = 4
 LINEAR_FADE_MIN_STEPS_SEC = 30
-LINEAR_FADE_BLEND_MS = 200
-VELOCITY_DEADBAND_HZ = 500
-POSITION_TRACKING_DEADBAND = 5
+FLAT_MOVE_SPEED_HZ = 18684
+USE_DIRECT_CONTROLLER = True
 ```
 
-**What didn't work**: Constant velocity mode (tried to match DMX rate exactly) - caused overshoot and correction bursts.
+**Solution**: DirectDMXController - direct DMX-following without acceleration limiting eliminates micro-shoots entirely.
 
 ## Dual-Core Architecture
 
-- **Core 0**: Main loop (homing + runtime), `ChunkedPositionController`, file I/O
+- **Core 0**: Main loop (homing + runtime), `DirectDMXController`, file I/O
 - **Core 1**: DMX worker via `_thread.start_new_thread()`
 - **SharedDMXState**: Lock-protected bridge between cores using `_thread.allocate_lock()`
 - Communication: worker writes shared state under lock, main loop reads via `snapshot()` — lock-and-copy pattern

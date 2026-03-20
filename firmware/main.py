@@ -141,7 +141,7 @@ class SharedDMXState:
 
 
 class ChunkedPositionController:
-    """Acceleration-limited position tracking with linear fade detection."""
+    """Acceleration-limited position tracking using short PIO step chunks."""
 
     def __init__(self, axis, span_steps):
         self.axis = axis
@@ -157,28 +157,11 @@ class ChunkedPositionController:
         self._last_target_u16 = config.DEFAULT_TARGET_U16
         self._last_applied_target_u16 = None
 
-        self._dmx_history = [(0, 0)] * config.LINEAR_FADE_WINDOW
-        self._dmx_history_idx = 0
-        self._dmx_history_full = False
-        self._fade_velocity_hz = 0.0
-        self._fade_direction = 0
-        self._is_linear_fade = False
-        self._fade_blend_ms = 0.0
-        self._prev_was_linear = False
-
     def hold_position(self):
         self.target_position_steps = int(self.current_position_steps)
         self.current_speed_hz = 0.0
         self._step_accumulator = 0.0
         self._last_update_ms = time.ticks_ms()
-        self._reset_dmx_history()
-
-    def _reset_dmx_history(self):
-        self._dmx_history = [(0, 0)] * config.LINEAR_FADE_WINDOW
-        self._dmx_history_idx = 0
-        self._dmx_history_full = False
-        self._is_linear_fade = False
-        self._fade_velocity_hz = 0.0
 
     def apply_snapshot(self, snapshot_target_u16):
         if self._last_applied_target_u16 == snapshot_target_u16:
@@ -199,69 +182,14 @@ class ChunkedPositionController:
         else:
             self.target_position_steps = new_target
 
-    def _detect_linear_fade(self, target_u16, now_ms):
-        self._dmx_history[self._dmx_history_idx] = (now_ms, target_u16)
-        self._dmx_history_idx = (self._dmx_history_idx + 1) % config.LINEAR_FADE_WINDOW
-        if self._dmx_history_idx == 0:
-            self._dmx_history_full = True
-
-        min_samples = 4
-        if not self._dmx_history_full and self._dmx_history_idx < min_samples:
-            self._is_linear_fade = False
-            return
-
-        history = []
-        for i in range(min_samples):
-            idx = (self._dmx_history_idx - min_samples + i) % config.LINEAR_FADE_WINDOW
-            history.append(self._dmx_history[idx])
-
-        if history[0][0] == 0:
-            self._is_linear_fade = False
-            return
-
-        deltas = []
-        for i in range(1, len(history)):
-            dt = history[i][0] - history[i-1][0]
-            du = history[i][1] - history[i-1][1]
-            if dt > 0:
-                deltas.append(du / dt)
-
-        if len(deltas) < min_samples - 1:
-            self._is_linear_fade = False
-            return
-
-        avg_delta = sum(deltas) / len(deltas)
-
-        if abs(avg_delta) < 0.5:
-            self._is_linear_fade = False
-            self._fade_velocity_hz = 0.0
-            return
-
-        variance = sum((d - avg_delta) ** 2 for d in deltas) / len(deltas)
-        same_sign = all((d > 0) == (avg_delta > 0) for d in deltas if abs(d) > 0.5)
-
-        if variance < config.LINEAR_FADE_VARIANCE_THRESH and same_sign:
-            self._is_linear_fade = True
-            u16_per_ms = avg_delta
-            steps_per_u16 = self.span_steps / 65535.0
-            self._fade_velocity_hz = abs(u16_per_ms) * 1000.0 * steps_per_u16
-            self._fade_direction = 1 if avg_delta > 0 else -1
-
-            if self._fade_velocity_hz < config.LINEAR_FADE_MIN_STEPS_SEC:
-                self._is_linear_fade = False
-                self._fade_velocity_hz = 0.0
-        else:
-            self._is_linear_fade = False
-            self._fade_velocity_hz = 0.0
-
     def _approach(self, current, target, delta):
         if current < target:
-            return min(target, current + max(0, delta))
+            return min(target, current + delta)
         if current > target:
-            return max(target, current - max(0, delta))
+            return max(target, current - delta)
         return target
 
-    def update(self, target_u16=0):
+    def update(self):
         now_ms = time.ticks_ms()
         elapsed_ms = time.ticks_diff(now_ms, self._last_update_ms)
         if elapsed_ms <= 0:
@@ -273,17 +201,8 @@ class ChunkedPositionController:
             self._step_accumulator = 0.0
             return 0
 
-        self._detect_linear_fade(target_u16, now_ms)
-
         distance = int(self.target_position_steps) - int(self.current_position_steps)
-
         if distance == 0 and abs(self.current_speed_hz) < 1.0:
-            self.current_speed_hz = 0.0
-            self._step_accumulator = 0.0
-            return 0
-
-        tracking_deadband = int(config.POSITION_TRACKING_DEADBAND)
-        if abs(distance) <= tracking_deadband and abs(self.current_speed_hz) < float(config.VELOCITY_DEADBAND_HZ):
             self.current_speed_hz = 0.0
             self._step_accumulator = 0.0
             return 0
@@ -294,11 +213,6 @@ class ChunkedPositionController:
             direction = 1
         elif distance < 0:
             direction = -1
-
-        if self._is_linear_fade and direction != 0:
-            max_chunk = min(config.LINEAR_FADE_CHUNK_STEPS, int(config.RUNTIME_MAX_CHUNK_STEPS))
-        else:
-            max_chunk = int(config.RUNTIME_MAX_CHUNK_STEPS)
 
         desired_speed = 0.0
         if direction != 0:
@@ -336,7 +250,7 @@ class ChunkedPositionController:
             self._step_accumulator = 0.0
             return 0
 
-        steps_to_take = min(steps_due, remaining, max_chunk)
+        steps_to_take = min(steps_due, remaining, int(config.RUNTIME_MAX_CHUNK_STEPS))
         if steps_to_take <= 0:
             return 0
 
@@ -806,7 +720,7 @@ def main():
                 stable_target_since_ms = int(now_ms)
                 controller._last_target_u16 = target_u16
 
-            moved = controller.update(target_u16)
+            moved = controller.update()
             if moved > 0:
                 total_steps_emitted += int(moved)
                 last_step_ms = int(now_ms)

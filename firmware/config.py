@@ -78,17 +78,6 @@ RUNTIME_CONTROL_SLEEP_MS = 0
 RUNTIME_MAX_CHUNK_STEPS = 64
 RUNTIME_MIN_CHUNK_SPEED_HZ = 500
 
-# Linear fade detection (disabled - approach not working)
-LINEAR_FADE_WINDOW = 16
-LINEAR_FADE_VARIANCE_THRESH = 5.0
-LINEAR_FADE_CHUNK_STEPS = 4
-LINEAR_FADE_MIN_STEPS_SEC = 30
-LINEAR_FADE_BLEND_MS = 200
-
-# Motion smoothing
-VELOCITY_DEADBAND_HZ = 500  # Allow speed error during motion
-POSITION_TRACKING_DEADBAND = 5  # Steps of tracking tolerance
-
 # Result / status output
 RESULT_FILE = "homing_result.json"
 STATUS_FILE = "controller_status.json"

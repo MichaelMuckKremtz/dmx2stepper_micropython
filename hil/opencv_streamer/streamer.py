@@ -56,15 +56,18 @@ class SharedState:
         self._lock = threading.Lock()
         self._frame: bytes | None = None
         self._x: int | None = None
+        self._x_timestamp: float = 0.0
         self._x_version: int = 0
         self._frame_event = threading.Event()
         self._x_condition = threading.Condition(self._lock)
 
     def update(self, frame: bytes, x: int | None) -> None:
+        now = time.monotonic()
         with self._x_condition:
             self._frame = frame
             changed = x != self._x
             self._x = x
+            self._x_timestamp = now
             if changed:
                 self._x_version += 1
                 self._x_condition.notify_all()
@@ -81,12 +84,12 @@ class SharedState:
 
     def wait_for_x_update(
         self, last_version: int, timeout: float = 5.0
-    ) -> tuple[int | None, int]:
+    ) -> tuple[int | None, float, int]:
         with self._x_condition:
             self._x_condition.wait_for(
                 lambda: self._x_version != last_version, timeout=timeout
             )
-            return self._x, self._x_version
+            return self._x, self._x_timestamp, self._x_version
 
 
 # ---------------------------------------------------------------------------
@@ -285,14 +288,16 @@ class TcpClientHandler(threading.Thread):
         self._conn = conn
         self._addr = addr
         self._state = state
+        self._start_time = time.monotonic()
 
     def run(self):
         log.info("TCP client connected: %s:%d", *self._addr)
         last_version = -1
         try:
             while True:
-                x, last_version = self._state.wait_for_x_update(last_version, timeout=5.0)
-                msg = "null\n" if x is None else f"{x}\n"
+                x, timestamp, last_version = self._state.wait_for_x_update(last_version, timeout=5.0)
+                relative_time = timestamp - self._start_time
+                msg = "null\n" if x is None else f"{x},{relative_time:.3f}\n"
                 self._conn.sendall(msg.encode())
         except (BrokenPipeError, ConnectionResetError):
             log.info("TCP client disconnected: %s:%d", *self._addr)

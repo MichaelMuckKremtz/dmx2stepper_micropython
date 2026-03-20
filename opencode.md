@@ -48,53 +48,37 @@ CH8=255 (reset/homing) → DMX=0 (center) → DMX=558 (LEFT, 7s fade) → DMX=55
 
 **Fixed**: Holds now stay fixed with 11-37px spread (was 90px). Position really stays fixed.
 
-**Remaining**: Jitter on the slow linear fade moves (LEFT/RIGHT transitions). The fade portions still show continuous oscillation during motion.
+**Improved**: Fade smoothness with linear fade-aware controller:
+- Added fade detection (rolling window of DMX changes)
+- Smaller chunks during detected linear fades (4 steps vs 64)
+- Tracking deadband (5 steps) reduces hunting during motion
+- Results: good fades avg stdev reduced from 2.30 to 1.33
 
-### Next Milestone: Butter-smooth motion in fades
+### Linear Fade-Aware Controller (IMPLEMENTED)
 
-Goal: Reduce/eliminate the micro-jitter during slow linear fade portions of the DMX loop (7s transitions from center→LEFT and LEFT→RIGHT).
+**Approach**: Detect when DMX is changing linearly, use smaller step chunks during fades.
 
-Investigation needed:
-- H2: Chunked blocking motion (64-step chunks with 3.4ms blocking)
-- H4: Blocking sleep in `pio_stepper.py` `move_fixed_steps_blocking()`
+**Detection**: Rolling 16-sample window, detects consistent DMX rate changes.
 
-### Top Hypothesis (H1): `apply_snapshot` re-triggers motion every frame
+**Results**:
+| Metric | Baseline | With Linear Fade Controller |
+|--------|----------|----------------------------|
+| Good fades avg stdev | 2.30 | **1.33** |
+| Best fade stdev | 1.09 | **1.22** |
+| Worst good fade | 4.02 | 1.44 |
 
-In `main.py` lines 165-178, `ChunkedPositionController.apply_snapshot()`:
+**Config additions**:
 ```python
-def apply_snapshot(self, snapshot_target_u16):
-    new_target = int(map_u16_to_steps_with_margin(...))
-    at_target = (current_pos == target_pos and speed < 1.0)
-    if at_target and abs(new_target - current_pos) <= DEADBAND:
-        pass  # skipped
-    else:
-        self.target_position_steps = new_target  # ALWAYS SETS, even if DMX unchanged
+LINEAR_FADE_WINDOW = 16
+LINEAR_FADE_VARIANCE_THRESH = 5.0
+LINEAR_FADE_CHUNK_STEPS = 4
+LINEAR_FADE_MIN_STEPS_SEC = 30
+LINEAR_FADE_BLEND_MS = 200
+VELOCITY_DEADBAND_HZ = 500
+POSITION_TRACKING_DEADBAND = 5
 ```
 
-Every DMX frame re-sets `target_position_steps`, causing the step accumulator to keep hunting. Fix: track `_last_applied_target_u16`, only call `set_target()` when the DMX value actually changes.
-
-### Secondary Hypothesis (H2): Chunked blocking motion
-
-64-step chunks with ~3.4ms `time.sleep_ms()` blocking creates discrete motion bursts. Try reducing `RUNTIME_MAX_CHUNK_STEPS` in `config.py`.
-
-### Tertiary Hypothesis (H4): Blocking sleep in `pio_stepper.py`
-
-`time.sleep_ms(wait_ms)` in `move_fixed_steps_blocking()` blocks the main loop.
-
-## Investigation Plan
-
-See `/home/pi/.local/share/opencode/plans/glitch_investigation.md` for full 5-step plan.
-
-### Step 1 (COMPLETED)
-Added `_last_applied_target_u16` to `ChunkedPositionController` in `main.py`. The `apply_snapshot()` method now returns early if the DMX u16 value hasn't changed, preventing the step accumulator from hunting on every frame.
-
-**Results**: X data shows dramatic improvement:
-- RIGHT hold region (lines 695-720): **11px spread** (551-562)
-- Previous issue: "90px spread during LEFT (expected ~25px)"
-- Micro-jitter eliminated, motor now settles properly during holds
-
-### After fix
-Run 3+ full loops of X data collection and analyze. Look for reduction in oscillation spread. ✓ Done - spread reduced from ~90px to 11-37px
+**What didn't work**: Constant velocity mode (tried to match DMX rate exactly) - caused overshoot and correction bursts.
 
 ## Dual-Core Architecture
 

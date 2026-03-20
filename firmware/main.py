@@ -155,6 +155,7 @@ class ChunkedPositionController:
         self._last_update_ms = time.ticks_ms()
         self._step_accumulator = 0.0
         self._last_target_u16 = config.DEFAULT_TARGET_U16
+        self._last_applied_target_u16 = None
 
     def hold_position(self):
         self.target_position_steps = int(self.current_position_steps)
@@ -163,6 +164,10 @@ class ChunkedPositionController:
         self._last_update_ms = time.ticks_ms()
 
     def apply_snapshot(self, snapshot_target_u16):
+        if self._last_applied_target_u16 == snapshot_target_u16:
+            return
+        self._last_applied_target_u16 = snapshot_target_u16
+
         new_target = int(
             map_u16_to_steps_with_margin(
                 snapshot_target_u16,

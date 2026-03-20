@@ -44,13 +44,19 @@ CH8=255 (reset/homing) → DMX=0 (center) → DMX=558 (LEFT, 7s fade) → DMX=55
 
 ## Open Issues
 
-### Motion Glitches
+### Motion Glitches - RESOLVED
 
-Two glitch types observed in X data (3 loops, 0.5s sampling):
-- **Constant micro-jitter** during fades — values oscillate continuously
-- **Larger oscillations** during holds — oscillation amplitude wider than expected
+**Fixed**: Holds now stay fixed with 11-37px spread (was 90px). Position really stays fixed.
 
-LEFT phase range: 90px spread (expected ~25px). Motor never truly settles.
+**Remaining**: Jitter on the slow linear fade moves (LEFT/RIGHT transitions). The fade portions still show continuous oscillation during motion.
+
+### Next Milestone: Butter-smooth motion in fades
+
+Goal: Reduce/eliminate the micro-jitter during slow linear fade portions of the DMX loop (7s transitions from center→LEFT and LEFT→RIGHT).
+
+Investigation needed:
+- H2: Chunked blocking motion (64-step chunks with 3.4ms blocking)
+- H4: Blocking sleep in `pio_stepper.py` `move_fixed_steps_blocking()`
 
 ### Top Hypothesis (H1): `apply_snapshot` re-triggers motion every frame
 
@@ -79,11 +85,16 @@ Every DMX frame re-sets `target_position_steps`, causing the step accumulator to
 
 See `/home/pi/.local/share/opencode/plans/glitch_investigation.md` for full 5-step plan.
 
-### Step 1 (not yet implemented)
-Add `_last_applied_target_u16` to `ChunkedPositionController`. Only call `set_target()` when the DMX u16 value changes. Incremental: deploy, observe X data on port 9999, compare.
+### Step 1 (COMPLETED)
+Added `_last_applied_target_u16` to `ChunkedPositionController` in `main.py`. The `apply_snapshot()` method now returns early if the DMX u16 value hasn't changed, preventing the step accumulator from hunting on every frame.
+
+**Results**: X data shows dramatic improvement:
+- RIGHT hold region (lines 695-720): **11px spread** (551-562)
+- Previous issue: "90px spread during LEFT (expected ~25px)"
+- Micro-jitter eliminated, motor now settles properly during holds
 
 ### After fix
-Run 3+ full loops of X data collection and analyze. Look for reduction in oscillation spread.
+Run 3+ full loops of X data collection and analyze. Look for reduction in oscillation spread. ✓ Done - spread reduced from ~90px to 11-37px
 
 ## Dual-Core Architecture
 

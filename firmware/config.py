@@ -16,7 +16,7 @@ HOME_DIRECTION_TRIALS = (
 )
 
 # Optional external DIAG debug input. It is not required for MVP homing.
-DIAG_PIN = 9
+DIAG_PIN = 8
 DIAG_ACTIVE_LEVEL = 1
 
 # TMC2209 UART

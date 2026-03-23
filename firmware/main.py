@@ -332,10 +332,25 @@ def seek_endstop_uart(driver, axis, direction, speed_hz, label):
     if not driver.set_coolstep_threshold(config.HOME_COOLSTEP_THRESHOLD):
         status["stop_reason"] = "coolstep_config_failed"
         return status
-    driver.set_stallguard_threshold(0)
+    sgthrs = int(getattr(config, "HOME_SGTHRS", 0))
+    driver.set_stallguard_threshold(sgthrs)
+    status["sgthrs"] = sgthrs
+
+    diag_stall_steps = [0]
+    diag_first_trigger_steps = [None]
+    status["diag_triggers"] = 0
+    status["diag_first_trigger_steps"] = None
 
     def stop_fn(steps, elapsed_ms):
         nonlocal last_status_ms, low_sg_count
+
+        diag = driver.diag_triggered()
+        if diag and steps >= min_stall_steps:
+            diag_stall_steps[0] += 1
+            if diag_first_trigger_steps[0] is None:
+                diag_first_trigger_steps[0] = int(steps)
+                status["diag_first_trigger_steps"] = int(steps)
+            status["diag_triggers"] = int(diag_stall_steps[0])
 
         sg = driver.read_stallguard_result()
         if sg is not None:
@@ -372,13 +387,14 @@ def seek_endstop_uart(driver, axis, direction, speed_hz, label):
 
         if elapsed_ms - last_status_ms >= config.PRINT_INTERVAL_MS:
             debug_log(
-                "[seek:{}] elapsed={}ms steps={} sg={} low_hits={} thr={}".format(
+                "[seek:{}] elapsed={}ms steps={} sg={} low_hits={} thr={} diag={}".format(
                     label,
                     elapsed_ms,
                     steps,
                     status["last_sg"],
                     low_sg_count,
                     status["uart_threshold"],
+                    int(diag),
                 )
             )
             last_status_ms = elapsed_ms
@@ -400,12 +416,14 @@ def seek_endstop_uart(driver, axis, direction, speed_hz, label):
     status["success"] = search["stop_reason"] == "uart_stall"
 
     debug_log(
-        "[seek:{}] result success={} stop_reason={} steps={} elapsed={}ms".format(
+        "[seek:{}] result success={} stop_reason={} steps={} elapsed={}ms diag_triggers={} diag_first_at={}".format(
             label,
             int(status["success"]),
             status["stop_reason"],
             status["search_steps"],
             status["search_elapsed_ms"],
+            status["diag_triggers"],
+            status["diag_first_trigger_steps"],
         )
     )
     time.sleep_ms(config.HOME_SETTLE_MS)

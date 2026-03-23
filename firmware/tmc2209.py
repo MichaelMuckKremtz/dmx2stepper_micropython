@@ -15,6 +15,7 @@ class TMC2209:
     REG_CHOPCONF = 0x6C
     REG_IOIN = 0x06
 
+    GCONF_DIAG_ENABLE = 1 << 4
     GCONF_PDN_DISABLE = 1 << 6
     GCONF_MSTEP_REG_SELECT = 1 << 7
     GCONF_MULTISTEP_FILT = 1 << 8
@@ -84,7 +85,7 @@ class TMC2209:
         gconf = self.read_register(self.REG_GCONF)
         if gconf is None:
             return False
-        gconf |= self.GCONF_PDN_DISABLE | self.GCONF_MSTEP_REG_SELECT | self.GCONF_MULTISTEP_FILT
+        gconf |= self.GCONF_DIAG_ENABLE | self.GCONF_PDN_DISABLE | self.GCONF_MSTEP_REG_SELECT | self.GCONF_MULTISTEP_FILT
         return self.write_register(self.REG_GCONF, gconf)
 
     def set_enabled(self, enabled):

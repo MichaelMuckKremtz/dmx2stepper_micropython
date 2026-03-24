@@ -70,7 +70,7 @@ HOME_SETTLE_MS = 150
 # Two-pass homing: fast seek + slow touch-off for precision
 HOME_TWO_PASS = True
 HOME_TOUCHOFF_SPEED_1_8_HZ = 200  # slow approach speed (200 base = 3200 Hz actual)
-HOME_TOUCHOFF_RETRACT_STEPS = 64  # small retract before touch-off
+HOME_TOUCHOFF_RETRACT_STEPS = 128 # retract before touch-off (scaled by microsteps)
 HOME_TIMEOUT_MARGIN_MS = 1200
 HOME_COOLSTEP_THRESHOLD = 3200
 HOME_SGTHRS = 0

@@ -659,14 +659,16 @@ async def _dmx_task(state):
     """DMX reader coroutine — reads frames and updates shared state."""
     dmx = DMXReceiver(pin_num=config.DMX_PIN, sm_id=config.DMX_SM_ID)
     dmx.start()
+    start_ch = int(getattr(config, "DMX_START_CHANNEL", 1))
+    num_ch = int(getattr(config, "DMX_CHANNELS_TO_READ", 16))
     while True:
-        frame_received = await dmx.async_read_frame()
+        frame_received = await dmx.async_read_frame(start_channel=start_ch, num_channels=num_ch)
         if not frame_received:
             await asyncio.sleep_ms(0)
             continue
         if dmx.last_start_code != 0x00:
             continue
-        channels = dmx.get_channels(config.DMX_START_CHANNEL, 8)
+        channels = dmx.get_channels(start_ch, 8)
         if int(channels[7]) == 255:
             machine.reset()
         state["target_u16"] = (int(channels[0]) << 8) | int(channels[1])

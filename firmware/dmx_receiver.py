@@ -65,7 +65,8 @@ class DMXReceiver:
                     return True
         return False
 
-    def read_frame(self):
+    def read_frame(self, start_channel=1, num_channels=16):
+        """Read DMX frame with optional start channel and channel count."""
         if not self.receiving:
             return False
 
@@ -78,10 +79,15 @@ class DMXReceiver:
         time.sleep_us(50)
 
         bytes_received = 0
+        skip_until = start_channel - 1  # skip start_code + channels before our start
         timeout_start = time.ticks_us()
         while bytes_received <= DMX_MAX_CHANNELS:
             if self.sm.rx_fifo() > 0:
-                self.frame_buffer[bytes_received] = (self.sm.get() >> 24) & 0xFF
+                byte_val = (self.sm.get() >> 24) & 0xFF
+                if bytes_received >= skip_until:
+                    idx = bytes_received - skip_until
+                    if idx < num_channels:
+                        self.frame_buffer[idx] = byte_val
                 bytes_received += 1
                 timeout_start = time.ticks_us()
             else:
@@ -101,7 +107,7 @@ class DMXReceiver:
         self.last_frame_time = time.ticks_ms()
         return True
 
-    async def async_read_frame(self):
+    async def async_read_frame(self, start_channel=1, num_channels=16):
         """Async version of read_frame(). Yields during break-wait but not during byte reading."""
         if not self.receiving:
             return False
@@ -136,10 +142,15 @@ class DMXReceiver:
         time.sleep_us(50)
 
         bytes_received = 0
+        skip_until = start_channel - 1
         timeout_start = time.ticks_us()
         while bytes_received <= DMX_MAX_CHANNELS:
             if self.sm.rx_fifo() > 0:
-                self.frame_buffer[bytes_received] = (self.sm.get() >> 24) & 0xFF
+                byte_val = (self.sm.get() >> 24) & 0xFF
+                if bytes_received >= skip_until:
+                    idx = bytes_received - skip_until
+                    if idx < num_channels:
+                        self.frame_buffer[idx] = byte_val
                 bytes_received += 1
                 timeout_start = time.ticks_us()
             else:

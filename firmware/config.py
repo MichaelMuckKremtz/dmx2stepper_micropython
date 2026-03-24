@@ -4,6 +4,7 @@
 DMX_PIN = 29
 DMX_SM_ID = 4
 DMX_START_CHANNEL = 1
+DMX_CHANNELS_TO_READ = 16  # read only last N channels for faster processing
 
 # Step/dir trials for the active hardware
 STEP_DIR_TRIALS = (

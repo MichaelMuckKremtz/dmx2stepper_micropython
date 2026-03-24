@@ -155,13 +155,23 @@ def main():
         # Fine grid styling
         grid_color = '#cccccc'
         fine_grid_color = '#eeeeee'
-        
+
+        # Choose readable time tick interval based on duration
+        t_span = max(times) - min(times) if times else 1
+        if t_span > 120:
+            t_major = 30
+        elif t_span > 60:
+            t_major = 10
+        elif t_span > 20:
+            t_major = 5
+        else:
+            t_major = 1
+
         # 1. Main position plot with fine grid
         ax1 = fig.add_subplot(3, 1, 1)
         ax1.plot(times, values, 'b-', linewidth=1, alpha=0.9)
-        
-        # Grid with 1s resolution on x-axis
-        ax1.xaxis.set_major_locator(MultipleLocator(1))
+
+        ax1.xaxis.set_major_locator(MultipleLocator(t_major))
         ax1.yaxis.set_major_locator(MultipleLocator(50))
         ax1.grid(True, which='major', color=grid_color, linestyle='-', linewidth=0.5)
         ax1.grid(True, which='minor', color=fine_grid_color, linestyle='-', linewidth=0.3)
@@ -190,7 +200,7 @@ def main():
         ax2.axhline(y=20, color='gray', linestyle='--', alpha=0.4)
         ax2.axhline(y=-20, color='gray', linestyle='--', alpha=0.4)
         
-        ax2.xaxis.set_major_locator(MultipleLocator(1))
+        ax2.xaxis.set_major_locator(MultipleLocator(t_major))
         ax2.yaxis.set_major_locator(MultipleLocator(50))
         ax2.grid(True, which='major', color=grid_color, linestyle='-', linewidth=0.5)
         ax2.grid(True, which='minor', color=fine_grid_color, linestyle='-', linewidth=0.3)
@@ -239,6 +249,9 @@ def main():
                 ax3.set_title(f'Fade Detail: {stats["start_x"]} -> {stats["end_x"]} px over {stats["duration"]:.1f}s (stdev={stats["stdev"]:.1f}px)', fontsize=12)
                 ax3.legend(loc='lower right')
         
+        for ax in [ax1, ax2]:
+            ax.tick_params(axis='x', rotation=45)
+
         plt.tight_layout()
         plt.savefig(output_file, dpi=150, bbox_inches='tight')
         print(f"\nSaved visualization to {output_file}")

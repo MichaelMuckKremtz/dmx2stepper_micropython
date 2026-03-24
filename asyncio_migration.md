@@ -89,9 +89,14 @@ Any change that produces stdev > baseline + 5px is a regression — revert befor
 
 ## Possible future approaches (not yet attempted)
 
+- **Read only needed channels**: Instead of reading all 512 DMX channels (~23ms), read only the last 16 channels (~1.5ms). Add `DMX_START_CHANNEL` config (e.g., 497 for last 16). Requires PIO SM to capture only specific channel range.
+
 - **PIO-level DMA**: Use RP2040 DMA to read DMX bytes directly into a buffer without CPU involvement. This eliminates the 23 ms CPU block entirely. MicroPython's DMA support is limited but may be accessible via `mem32` register writes.
+
 - **Dual-PIO DMX reader**: A second PIO SM that extracts only the needed channels from the DMX stream, reducing FIFO pressure.
+
 - **Interrupt-driven DMX**: Use PIO IRQ to signal Python only when channel data is ready, rather than polling.
+
 - **Hybrid: asyncio for motion + thread for DMX**: Keep DMX on core 1 via `_thread` (where the GIL is acceptable for I/O-bound work) and use asyncio only for the motion loop. This might give the best of both worlds.
 
 ## What stays the same

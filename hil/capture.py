@@ -12,6 +12,7 @@ CAPTURES_DIR = os.path.join(os.path.dirname(__file__), 'captures')
 
 def main():
     duration = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_DURATION
+    label = sys.argv[2] if len(sys.argv) > 2 else None
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     txt_file = os.path.join(CAPTURES_DIR, f'{timestamp}_{duration}s_capture.txt')
@@ -42,9 +43,10 @@ def main():
     
     print(f'Generating analysis...')
     try:
-        subprocess.run([
-            'python3', 'analyze_x_data.py', txt_file, analysis_file
-        ], check=True)
+        cmd = ['python3', 'analyze_x_data.py', txt_file, analysis_file]
+        if label:
+            cmd.append(label)
+        subprocess.run(cmd, check=True)
         print(f'Analysis saved: {analysis_file}')
     except Exception as e:
         print(f'Analysis failed: {e}')

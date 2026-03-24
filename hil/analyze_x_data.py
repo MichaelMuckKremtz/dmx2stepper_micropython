@@ -23,6 +23,35 @@ def parse_data(filename):
                 continue
     return data
 
+def detect_startup_phase(data, velocities):
+    """Detect endstop events by velocity spikes below -1300 px/s.
+    Returns list of (start_t, end_t) excluded regions."""
+    if len(velocities) < 2:
+        return []
+    
+    excluded = []
+    VELOCITY_THRESHOLD = -1300
+    PRE_MARGIN = 0.5
+    POST_MARGIN = 3.0
+    
+    for t, v in velocities:
+        if v <= VELOCITY_THRESHOLD:
+            excluded.append((t - PRE_MARGIN, t + POST_MARGIN))
+    
+    # Merge overlapping regions
+    if not excluded:
+        return []
+    
+    excluded.sort()
+    merged = [excluded[0]]
+    for start, end in excluded[1:]:
+        if start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    
+    return merged
+
 def analyze_movement(data):
     """Analyze movement patterns."""
     if len(data) < 2:
@@ -38,38 +67,60 @@ def analyze_movement(data):
             vel = (data[i][1] - data[i-1][1]) / dt
             velocities.append((data[i][0], vel))
     
-    hold_threshold = 20
-    hold_regions = []
-    i = 0
-    while i < len(velocities):
-        if abs(velocities[i][1]) < hold_threshold:
-            t_start = velocities[i][0]
-            while i < len(velocities) and abs(velocities[i][1]) < hold_threshold:
-                i += 1
-            t_end = velocities[i-1][0] if i > 0 else t_start
-            if t_end > t_start + 0.5:
-                hold_regions.append((t_start, t_end))
-        else:
-            i += 1
+    # Detect endstop events
+    excluded_regions = detect_startup_phase(data, velocities)
     
+    # Filter velocities to exclude endstop regions
+    def in_excluded(t):
+        return any(s <= t <= e for s, e in excluded_regions)
+    
+    fade_velocities = [(t, v) for t, v in velocities if not in_excluded(t)]
+    
+    # Build fade regions from consecutive non-excluded velocities
     fade_regions = []
-    i = 0
-    while i < len(velocities):
-        if abs(velocities[i][1]) >= hold_threshold:
-            t_start = velocities[i][0]
-            while i < len(velocities) and abs(velocities[i][1]) >= hold_threshold:
-                i += 1
-            t_end = velocities[i-1][0] if i > 0 else t_start
-            fade_regions.append((t_start, t_end))
+    for t, v in fade_velocities:
+        if not fade_regions or t - fade_regions[-1][1] > 0.1:
+            fade_regions.append((t, t))
         else:
-            i += 1
+            fade_regions[-1] = (fade_regions[-1][0], t)
     
     return {
         'times': times,
         'values': values,
         'velocities': velocities,
-        'hold_regions': hold_regions,
         'fade_regions': fade_regions,
+        'excluded_regions': excluded_regions,
+    }
+
+def calculate_velocity_stability(velocities, fade_region):
+    """Calculate velocity stability metrics for a movement region."""
+    t0, t1 = fade_region
+    region_vels = [v for t, v in velocities if t0 <= t <= t1]
+    
+    if len(region_vels) < 3:
+        return None
+    
+    mean_v = sum(region_vels) / len(region_vels)
+    variance = sum((v - mean_v) ** 2 for v in region_vels) / len(region_vels)
+    stdev = math.sqrt(variance)
+    max_dev = max(abs(v - mean_v) for v in region_vels)
+    
+    # Jitter: average absolute velocity change between consecutive samples
+    deltas = [abs(region_vels[i] - region_vels[i-1]) for i in range(1, len(region_vels))]
+    avg_jitter = sum(deltas) / len(deltas) if deltas else 0
+    max_jitter = max(deltas) if deltas else 0
+    
+    # Coefficient of variation (normalized stability)
+    cv = (stdev / abs(mean_v) * 100) if abs(mean_v) > 1 else 0
+    
+    return {
+        'start_t': t0, 'end_t': t1,
+        'mean_vel': mean_v,
+        'stdev': stdev,
+        'max_dev': max_dev,
+        'avg_jitter': avg_jitter,
+        'max_jitter': max_jitter,
+        'cv_pct': cv,
     }
 
 def calculate_fade_stats(data, fade_region):
@@ -107,11 +158,12 @@ def calculate_fade_stats(data, fade_region):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 analyze_x_data.py <data_file> [output_png]")
+        print("Usage: python3 analyze_x_data.py <data_file> [output_png] [label]")
         sys.exit(1)
     
     filename = sys.argv[1]
     output_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(filename), os.path.basename(filename).replace('.txt', '_analysis.png'))
+    label = sys.argv[3] if len(sys.argv) > 3 else None
     
     data = parse_data(filename)
     print(f"Loaded {len(data)} data points")
@@ -127,8 +179,15 @@ def main():
     print(f"\n=== Analysis Results ===")
     print(f"Time range: {min(times):.2f}s - {max(times):.2f}s")
     print(f"X range: {min(values)} - {max(values)} ({max(values)-min(values)} px)")
+    
+    excluded_regions = analysis.get('excluded_regions', [])
+    if excluded_regions:
+        total_excluded = sum(e - s for s, e in excluded_regions)
+        print(f"Endstop exclusions: {len(excluded_regions)} regions ({total_excluded:.1f}s total)")
+        for s, e in excluded_regions:
+            print(f"  {s:.2f}s - {e:.2f}s ({e-s:.1f}s)")
+    
     print(f"Fade regions: {len(analysis['fade_regions'])}")
-    print(f"Hold regions (>0.5s): {len(analysis['hold_regions'])}")
     
     fade_stats = []
     for fade in analysis['fade_regions']:
@@ -143,6 +202,24 @@ def main():
         print(f"  Avg stdev: {avg_stdev:.2f} px")
         print(f"  Avg max dev: {avg_max_dev:.2f} px")
     
+    # Velocity stability metrics
+    vel_stability = []
+    for fade in analysis['fade_regions']:
+        vs = calculate_velocity_stability(analysis['velocities'], fade)
+        if vs:
+            vel_stability.append(vs)
+    
+    if vel_stability:
+        avg_v_stdev = sum(s['stdev'] for s in vel_stability) / len(vel_stability)
+        avg_v_jitter = sum(s['avg_jitter'] for s in vel_stability) / len(vel_stability)
+        max_v_jitter = max(s['max_jitter'] for s in vel_stability)
+        avg_cv = sum(s['cv_pct'] for s in vel_stability) / len(vel_stability)
+        print(f"\nVelocity Stability (n={len(vel_stability)}):")
+        print(f"  Avg stdev: {avg_v_stdev:.1f} px/s")
+        print(f"  Avg jitter: {avg_v_jitter:.1f} px/s")
+        print(f"  Max jitter: {max_v_jitter:.1f} px/s")
+        print(f"  Avg CV: {avg_cv:.1f}%")
+    
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -150,7 +227,7 @@ def main():
         import matplotlib.patches as mpatches
         from matplotlib.ticker import MultipleLocator
         
-        fig = plt.figure(figsize=(18, 14))
+        fig = plt.figure(figsize=(18, 10))
         
         # Fine grid styling
         grid_color = '#cccccc'
@@ -168,8 +245,14 @@ def main():
             t_major = 1
 
         # 1. Main position plot with fine grid
-        ax1 = fig.add_subplot(3, 1, 1)
+        ax1 = fig.add_subplot(2, 1, 1)
         ax1.plot(times, values, 'b-', linewidth=1, alpha=0.9)
+
+        # Shade excluded reset regions
+        excluded_regions = analysis.get('excluded_regions', [])
+        for idx, (ex_s, ex_e) in enumerate(excluded_regions):
+            label = 'Endstop (excluded)' if idx == 0 else None
+            ax1.axvspan(ex_s, ex_e, color='gray', alpha=0.3, label=label)
 
         ax1.xaxis.set_major_locator(MultipleLocator(t_major))
         ax1.yaxis.set_major_locator(MultipleLocator(50))
@@ -184,21 +267,29 @@ def main():
         if 'direct' in filename.lower():
             firmware_info = "DirectDMXController"
         
-        ax1.set_title(f'X Position vs Time\n{firmware_info} | {len(data)} points | X range: {max(values)-min(values)} px', fontsize=12)
+        title = f'X Position vs Time\n{firmware_info} | {len(data)} points | X range: {max(values)-min(values)} px'
+        if label:
+            title += f'\n[{label}]'
+        ax1.set_title(title, fontsize=12)
         
         # Legend
-        green_patch = mpatches.Patch(color='green', alpha=0.15, label='Fade')
-        red_patch = mpatches.Patch(color='red', alpha=0.15, label='Hold')
-        ax1.legend(handles=[green_patch, red_patch], loc='upper right')
+        handles = []
+        if excluded_regions:
+            handles.append(mpatches.Patch(color='gray', alpha=0.3, label=f'Endstop (excluded, {len(excluded_regions)})'))
+        ax1.legend(handles=handles, loc='upper right')
         
-        # 2. Velocity plot
-        ax2 = fig.add_subplot(3, 1, 2)
+        # 2. Velocity plot - shared x-axis with position
+        ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
         v_times = [v[0] for v in analysis['velocities']]
         v_vals = [v[1] for v in analysis['velocities']]
         ax2.plot(v_times, v_vals, 'r-', linewidth=0.5, alpha=0.7)
         ax2.axhline(y=0, color='black', linestyle='-', alpha=0.4)
         ax2.axhline(y=20, color='gray', linestyle='--', alpha=0.4)
         ax2.axhline(y=-20, color='gray', linestyle='--', alpha=0.4)
+        
+        # Shade excluded regions on velocity plot
+        for ex_s, ex_e in excluded_regions:
+            ax2.axvspan(ex_s, ex_e, color='gray', alpha=0.3)
         
         ax2.xaxis.set_major_locator(MultipleLocator(t_major))
         ax2.yaxis.set_major_locator(MultipleLocator(50))
@@ -208,46 +299,6 @@ def main():
         ax2.set_xlabel('Time (s)', fontsize=11)
         ax2.set_ylabel('Velocity (px/s)', fontsize=11)
         ax2.set_title('Movement Velocity', fontsize=12)
-        
-        # 3. Zoomed fade detail
-        ax3 = fig.add_subplot(3, 1, 3)
-        
-        # Show first significant fade with fine detail
-        significant_fades = [s for s in fade_stats if s['duration'] > 2]
-        if significant_fades:
-            stats = significant_fades[0]
-            t0, t1 = stats['start_t'], stats['end_t']
-            margin = stats['duration'] * 0.1
-            
-            fade_data = [(t, x) for t, x in data if t0 - margin <= t <= t1 + margin]
-            if fade_data:
-                f_times = [t for t, x in fade_data]
-                f_vals = [x for t, x in fade_data]
-                
-                ax3.plot(f_times, f_vals, 'b-', linewidth=1.5, label='Actual Position')
-                
-                # Ideal linear path
-                t_range = [t0, t1]
-                x_range = [stats['start_x'], stats['end_x']]
-                ax3.plot(t_range, x_range, 'r--', linewidth=2, label='Ideal Linear Path', alpha=0.8)
-                
-                # Deviation shading
-                ideal_slope = stats['velocity']
-                deviations = [x - (stats['start_x'] + ideal_slope * (t - t0)) for t, x in fade_data if t0 <= t <= t1]
-                if deviations:
-                    dev_text = f'Deviation: avg={sum(deviations)/len(deviations):.1f}px, max={max(abs(d) for d in deviations):.1f}px'
-                    ax3.text(0.02, 0.98, dev_text, transform=ax3.transAxes, fontsize=10,
-                            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
-                
-                ax3.xaxis.set_major_locator(MultipleLocator(0.5))
-                ax3.yaxis.set_major_locator(MultipleLocator(10))
-                ax3.grid(True, which='major', color=grid_color, linestyle='-', linewidth=0.5)
-                ax3.grid(True, which='minor', color=fine_grid_color, linestyle='-', linewidth=0.3)
-                
-                ax3.set_xlabel('Time (s)', fontsize=11)
-                ax3.set_ylabel('X Position (px)', fontsize=11)
-                ax3.set_title(f'Fade Detail: {stats["start_x"]} -> {stats["end_x"]} px over {stats["duration"]:.1f}s (stdev={stats["stdev"]:.1f}px)', fontsize=12)
-                ax3.legend(loc='lower right')
         
         for ax in [ax1, ax2]:
             ax.tick_params(axis='x', rotation=45)

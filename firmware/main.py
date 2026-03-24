@@ -684,9 +684,7 @@ async def _motion_task(runtime_axis, controller, state, result, homing_trial):
     total_steps_emitted = 0
     last_step_ms = None
     control_interval_ms = int(getattr(config, "RUNTIME_CONTROL_INTERVAL_MS", 10))
-    smoothing_alpha = float(getattr(config, "RUNTIME_SMOOTHING_ALPHA", 1.0))
     last_control_ms = time.ticks_ms()
-    smoothed_target_u16 = None
 
     while True:
         now_ms = time.ticks_ms()
@@ -698,15 +696,7 @@ async def _motion_task(runtime_axis, controller, state, result, homing_trial):
             continue
         
         last_control_ms = now_ms
-        raw_target_u16 = state["target_u16"]
-        
-        # Apply exponential moving average smoothing
-        if smoothed_target_u16 is None:
-            smoothed_target_u16 = raw_target_u16
-        else:
-            smoothed_target_u16 = int(smoothing_alpha * raw_target_u16 + (1 - smoothing_alpha) * smoothed_target_u16)
-        
-        target_u16 = smoothed_target_u16
+        target_u16 = state["target_u16"]
         controller.apply_snapshot(target_u16)
 
         if target_u16 != controller._last_target_u16:

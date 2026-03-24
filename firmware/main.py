@@ -1,6 +1,6 @@
 """UART-only homing with PIO steps followed by one-axis DMX runtime."""
 
-import _thread
+import asyncio
 import json
 import machine
 import os
@@ -118,27 +118,6 @@ def append_recent_event(events, event, max_events=32):
         del events[0]
 
 
-class SharedDMXState:
-    """State shared between the DMX reader thread and the motion loop."""
-
-    def __init__(self):
-        self._lock = _thread.allocate_lock()
-        self.target_u16 = int(config.DEFAULT_TARGET_U16)
-        self.frame_count = 0
-
-    def update_from_channels(self, channels, frame_count):
-        self._lock.acquire()
-        self.target_u16 = (int(channels[0]) << 8) | int(channels[1])
-        self.frame_count = int(frame_count)
-        self._lock.release()
-
-    def snapshot(self):
-        self._lock.acquire()
-        val = self.target_u16
-        count = self.frame_count
-        self._lock.release()
-        return val, count
-
 
 class ChunkedPositionController:
     """Acceleration-limited position tracking using short PIO step chunks."""
@@ -189,23 +168,24 @@ class ChunkedPositionController:
             return max(target, current - delta)
         return target
 
-    def update(self):
+    def compute_next_chunk(self):
+        """Compute next motion chunk. Returns (steps, direction, speed_hz) or None."""
         now_ms = time.ticks_ms()
         elapsed_ms = time.ticks_diff(now_ms, self._last_update_ms)
         if elapsed_ms <= 0:
-            return 0
+            return None
         self._last_update_ms = now_ms
 
         if not self.enabled:
             self.current_speed_hz = 0.0
             self._step_accumulator = 0.0
-            return 0
+            return None
 
         distance = int(self.target_position_steps) - int(self.current_position_steps)
         if distance == 0 and abs(self.current_speed_hz) < 1.0:
             self.current_speed_hz = 0.0
             self._step_accumulator = 0.0
-            return 0
+            return None
 
         elapsed_s = elapsed_ms / 1000.0
         direction = 0
@@ -243,33 +223,28 @@ class ChunkedPositionController:
         self._step_accumulator += abs(self.current_speed_hz) * elapsed_s
         steps_due = int(self._step_accumulator)
         if steps_due <= 0:
-            return 0
+            return None
 
         remaining = abs(int(self.target_position_steps) - int(self.current_position_steps))
         if remaining <= 0:
             self._step_accumulator = 0.0
-            return 0
+            return None
 
         steps_to_take = min(steps_due, remaining, int(config.RUNTIME_MAX_CHUNK_STEPS))
         if steps_to_take <= 0:
-            return 0
+            return None
 
         effective_speed = int(max(config.RUNTIME_MIN_CHUNK_SPEED_HZ, min(abs(self.current_speed_hz), self.max_speed_hz)))
-        moved = int(
-            self.axis.move_fixed_steps_blocking(
-                steps_to_take,
-                direction,
-                effective_speed,
-                poll_ms=1,
-            )
-        )
+        return (steps_to_take, direction, effective_speed)
+
+    def record_moved(self, moved, direction, steps_requested):
+        """Update position and accumulator after a move completes."""
+        moved = int(moved)
         self.current_position_steps += moved if direction > 0 else -moved
         self._step_accumulator -= moved
-        if moved < steps_to_take:
+        if moved < steps_requested:
             self.current_speed_hz = 0.0
             self._step_accumulator = 0.0
-        return moved
-
 
 def build_driver():
     return TMC2209(
@@ -680,19 +655,96 @@ def run_homing(driver, result):
     return None
 
 
-def dmx_worker(shared):
+async def _dmx_task(state):
+    """DMX reader coroutine — reads frames and updates shared state."""
     dmx = DMXReceiver(pin_num=config.DMX_PIN, sm_id=config.DMX_SM_ID)
     dmx.start()
     while True:
-        frame_received = dmx.read_frame()
+        frame_received = await dmx.async_read_frame()
         if not frame_received:
+            await asyncio.sleep_ms(0)
             continue
         if dmx.last_start_code != 0x00:
             continue
         channels = dmx.get_channels(config.DMX_START_CHANNEL, 8)
         if int(channels[7]) == 255:
             machine.reset()
-        shared.update_from_channels(channels, dmx.get_frame_count())
+        state["target_u16"] = (int(channels[0]) << 8) | int(channels[1])
+        state["frame_count"] = dmx.get_frame_count()
+
+
+async def _motion_task(runtime_axis, controller, state, result, homing_trial):
+    """Motion controller coroutine — fixed-rate execution for linear movement."""
+    last_status_ms = -config.STATUS_INTERVAL_MS
+    runtime_start_ms = time.ticks_ms()
+    stable_target_since_ms = None
+    idle_since_ms = None
+    total_steps_emitted = 0
+    last_step_ms = None
+    control_interval_ms = int(getattr(config, "RUNTIME_CONTROL_INTERVAL_MS", 10))
+    last_control_ms = time.ticks_ms()
+
+    while True:
+        now_ms = time.ticks_ms()
+        elapsed_ms = time.ticks_diff(now_ms, last_control_ms)
+        
+        # Fixed-rate control: only compute at fixed intervals
+        if elapsed_ms < control_interval_ms:
+            await asyncio.sleep_ms(control_interval_ms - elapsed_ms)
+            continue
+        
+        last_control_ms = now_ms
+        target_u16 = state["target_u16"]
+        controller.apply_snapshot(target_u16)
+
+        if target_u16 != controller._last_target_u16:
+            stable_target_since_ms = int(now_ms)
+            controller._last_target_u16 = target_u16
+
+        chunk = controller.compute_next_chunk()
+        if chunk is not None:
+            steps_to_take, direction, effective_speed = chunk
+            runtime_axis.start_counted(steps_to_take, direction, effective_speed)
+            await asyncio.sleep_ms(runtime_axis.pending_wait_ms)
+            moved = runtime_axis.finalize_counted()
+            controller.record_moved(moved, direction, steps_to_take)
+            if moved > 0:
+                total_steps_emitted += int(moved)
+                last_step_ms = int(now_ms)
+        else:
+            await asyncio.sleep_ms(0)
+
+        at_target_after = (
+            int(controller.current_position_steps) == int(controller.target_position_steps)
+            and abs(float(controller.current_speed_hz)) < 1.0
+        )
+        if at_target_after:
+            if idle_since_ms is None:
+                idle_since_ms = int(now_ms)
+        else:
+            idle_since_ms = None
+
+        if (
+            bool(config.RUNTIME_STATUS_STREAM_ENABLED)
+            and int(config.STATUS_INTERVAL_MS) > 0
+            and time.ticks_diff(now_ms, last_status_ms) >= config.STATUS_INTERVAL_MS
+        ):
+            write_json(
+                config.STATUS_FILE,
+                build_runtime_status(
+                    result, homing_trial, controller, target_u16,
+                    stable_target_since_ms, idle_since_ms,
+                    total_steps_emitted, last_step_ms,
+                ),
+            )
+            last_status_ms = now_ms
+
+        if (
+            int(config.RUNTIME_EXIT_AFTER_MS) > 0
+            and time.ticks_diff(now_ms, runtime_start_ms) >= int(config.RUNTIME_EXIT_AFTER_MS)
+        ):
+            debug_log("[runtime] exiting after configured runtime window")
+            return
 
 
 def build_runtime_status(
@@ -810,15 +862,7 @@ def main():
         controller.current_position_steps = initial_pos
         controller.target_position_steps = initial_pos
 
-        shared = SharedDMXState()
-        _thread.start_new_thread(dmx_worker, (shared,))
-
-        last_status_ms = -config.STATUS_INTERVAL_MS
-        runtime_start_ms = time.ticks_ms()
-        stable_target_since_ms = None
-        idle_since_ms = None
-        total_steps_emitted = 0
-        last_step_ms = None
+        state = {"target_u16": int(config.DEFAULT_TARGET_U16), "frame_count": 0}
 
         debug_log(
             "[runtime] selected_trial={} step=GP{} dir=GP{} home_dir={} travel_steps={}".format(
@@ -830,58 +874,11 @@ def main():
             )
         )
 
-        while True:
-            now_ms = time.ticks_ms()
-            target_u16, frame_count = shared.snapshot()
-            controller.apply_snapshot(target_u16)
+        asyncio.run(asyncio.gather(
+            _dmx_task(state),
+            _motion_task(runtime_axis, controller, state, result, homing_trial),
+        ))
 
-            if target_u16 != controller._last_target_u16:
-                stable_target_since_ms = int(now_ms)
-                controller._last_target_u16 = target_u16
-
-            moved = controller.update()
-            if moved > 0:
-                total_steps_emitted += int(moved)
-                last_step_ms = int(now_ms)
-
-            at_target_after = (
-                int(controller.current_position_steps) == int(controller.target_position_steps)
-                and abs(float(controller.current_speed_hz)) < 1.0
-            )
-            if at_target_after:
-                if idle_since_ms is None:
-                    idle_since_ms = int(now_ms)
-            else:
-                idle_since_ms = None
-
-            if (
-                bool(config.RUNTIME_STATUS_STREAM_ENABLED)
-                and int(config.STATUS_INTERVAL_MS) > 0
-                and time.ticks_diff(now_ms, last_status_ms) >= config.STATUS_INTERVAL_MS
-            ):
-                write_json(
-                    config.STATUS_FILE,
-                    build_runtime_status(
-                        result,
-                        homing_trial,
-                        controller,
-                        target_u16,
-                        stable_target_since_ms,
-                        idle_since_ms,
-                        total_steps_emitted,
-                        last_step_ms,
-                    ),
-                )
-                last_status_ms = now_ms
-
-            if (
-                int(config.RUNTIME_EXIT_AFTER_MS) > 0
-                and time.ticks_diff(now_ms, runtime_start_ms) >= int(config.RUNTIME_EXIT_AFTER_MS)
-            ):
-                debug_log("[runtime] exiting after configured runtime window")
-                return
-
-            time.sleep_ms(config.RUNTIME_CONTROL_SLEEP_MS)
     finally:
         if runtime_axis is not None:
             runtime_axis.deinit()

@@ -79,6 +79,8 @@ class PIOStepper:
         self.counter_frequency = int(counter_frequency)
         self._running = False
         self._freerun_mode = False
+        self._pending_steps = 0
+        self.pending_wait_ms = 0
 
         self._pull_encoded = rp2.asm_pio_encode("pull()", 0)
         self._mov_x_osr_encoded = rp2.asm_pio_encode("mov(x, osr)", 0)
@@ -238,6 +240,36 @@ class PIOStepper:
                 time.sleep_ms(max(1, int(poll_ms)))
         finally:
             self.stop()
+
+    def start_counted(self, steps, direction, speed_hz):
+        """Start a counted move without blocking. Stores pending_wait_ms. Call finalize_counted() after."""
+        steps = max(0, int(steps))
+        self._pending_steps = steps
+        if steps == 0:
+            self.pending_wait_ms = 0
+            return 0
+        if self._freerun_mode:
+            self.stop()
+            self._init_step_sm_counted()
+        self.set_direction(direction)
+        delay = self.speed_to_delay(speed_hz)
+        cycles_per_step = self.PIO_FIX + delay * self.PIO_VAR
+        total_us = int(steps * cycles_per_step * 1_000_000 / self.step_frequency)
+        self.pending_wait_ms = max(1, total_us // 1000) + 2
+        self.step_sm.put(steps - 1)
+        self.step_sm.put(delay)
+        self.step_sm.active(1)
+        self._running = True
+        return steps
+
+    def finalize_counted(self):
+        """Complete a counted move started by start_counted(). Returns steps moved."""
+        if not self._running:
+            return 0
+        self.step_sm.active(0)
+        self.step_pin.value(0)
+        self._running = False
+        return self._pending_steps
 
     def deinit(self):
         self.stop()

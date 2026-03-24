@@ -1,6 +1,7 @@
 """PIO-based DMX512 receiver for RP2040 MicroPython."""
 
 import array
+import asyncio
 import time
 
 import rp2
@@ -71,6 +72,64 @@ class DMXReceiver:
         if not self._wait_for_break():
             return False
 
+        while self.sm.rx_fifo() > 0:
+            self.sm.get()
+
+        time.sleep_us(50)
+
+        bytes_received = 0
+        timeout_start = time.ticks_us()
+        while bytes_received <= DMX_MAX_CHANNELS:
+            if self.sm.rx_fifo() > 0:
+                self.frame_buffer[bytes_received] = (self.sm.get() >> 24) & 0xFF
+                bytes_received += 1
+                timeout_start = time.ticks_us()
+            else:
+                if time.ticks_diff(time.ticks_us(), timeout_start) > FRAME_GAP_TIMEOUT_US:
+                    break
+                time.sleep_us(10)
+
+        if bytes_received == 0:
+            return False
+
+        self.last_start_code = self.frame_buffer[0]
+        if self.last_start_code != DMX_START_CODE:
+            self.start_code_errors += 1
+
+        self.last_bytes_received = bytes_received
+        self.frame_count += 1
+        self.last_frame_time = time.ticks_ms()
+        return True
+
+    async def async_read_frame(self):
+        """Async version of read_frame(). Yields during break-wait but not during byte reading."""
+        if not self.receiving:
+            return False
+
+        # Wait for break — yield cooperatively while pin is high (inter-frame gap)
+        deadline = time.ticks_add(time.ticks_ms(), 100)
+        found_break = False
+        while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+            if self._pin_value() == 0:
+                start = time.ticks_us()
+                while self._pin_value() == 0:
+                    if time.ticks_diff(time.ticks_us(), start) > 200:
+                        while self._pin_value() == 0:
+                            pass
+                        found_break = True
+                        break
+                if not found_break:
+                    duration = time.ticks_diff(time.ticks_us(), start)
+                    if duration > 44:
+                        found_break = True
+                if found_break:
+                    break
+            await asyncio.sleep_ms(0)
+
+        if not found_break:
+            return False
+
+        # Flush stale bytes, then read frame bytes — no yields (FIFO timing critical)
         while self.sm.rx_fifo() > 0:
             self.sm.get()
 
